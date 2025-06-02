@@ -1,0 +1,35 @@
+[project]
+name = "microscope-control"
+version = "0.1.0"
+dependencies =[
+ "pymmcore-plus[cli,io]>=0.1",
+    "useq-schema>=0.7",
+    "napari>=0.6", 
+    "magicgui>=0.5", 
+    "numpy>=1.23",
+    "inputs>=0.5",
+]
+requires-python = ">=3.10"
+authors = [
+  { name = "Brandon Scott", email = "brandon.scott@sdsmt.edu" }
+]
+description = "OPM Microscope Control System"
+readme = "README.md"
+license =  "MIT"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "sphinx",
+    "black",
+    "isort",
+    "mypy",
+    "ruff>=0.11",
+]
+
+[project.urls]
+Homepage = "https://github.com/bscott711/microscope-control"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

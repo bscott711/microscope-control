@@ -1,0 +1,6 @@
+pyproject.toml
+microscope_control.egg-info/PKG-INFO
+microscope_control.egg-info/SOURCES.txt
+microscope_control.egg-info/dependency_links.txt
+microscope_control.egg-info/requires.txt
+microscope_control.egg-info/top_level.txt

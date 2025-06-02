@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+src/microscope/config.py
+src/microscope/hardware.py
+src/microscope/calibration/__init__.py
+src/microscope/calibration/crisp_calibration.py
+src/microscope_control.egg-info/PKG-INFO
+src/microscope_control.egg-info/SOURCES.txt
+src/microscope_control.egg-info/dependency_links.txt
+src/microscope_control.egg-info/requires.txt
+src/microscope_control.egg-info/top_level.txt
