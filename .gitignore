@@ -1,0 +1,141 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+# Usually these files are written by a CI, but they pollute the repository if managed locally.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Django stuff
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+instance/
+# Files in Django's media folder, often images and user-uploaded files
+media/
+
+# Flask stuff
+instance/
+.webassets-cache
+# Migrations should always be ignored in favor of generated migrations based on model changes.
+*/migrations/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project files
+.spyderproject
+.spyproject
+
+# Rope project files
+.ropeproject
+
+# PyCharm files
+.idea/
+
+# VSCode files
+.vscode/
+
+# Eclipse files
+.project
+.pydevproject
+# CDT-generated files
+.cproject
+
+# MyPy cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytest cache
+.pytest_cache/
+
+# Ruff cache
+.ruff_cache/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Config files (if they contain secrets or are user-specific)
+# Consider adding specific names if general patterns are too broad
+# config.yaml
+# config.json
+# secrets.yaml
+# secrets.json
+# .secrets.toml
+# If you have secrets, consider using a .env file (already listed) or git-crypt.
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Temporary files
+*.tmp
+*~
+*.swp
+*.bak
+*.orig
+temp/
+tmp/
