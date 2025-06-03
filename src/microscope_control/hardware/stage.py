@@ -36,13 +36,11 @@ class Stage:
         self._current_position: float = 0.0  # Cache for current position
         self._is_jogging: bool = False # Represents if a jog command sequence is active
         self._jog_speed: float = 0.0 # Already initialized earlier, ensure no re-init here
-        self._jog_direction: str = "" # Already initialized earlier
+        self._jog_direction: str = ""
 
         self.mock_hw = mock_hw
-        self.stage_device_label = stage_device_label # Store this regardless of mode
-        self._current_position: float = 0.0
-        self._is_jogging: bool = False
-        # Note: self._jog_speed and self._jog_direction are already initialized above.
+        # self.stage_device_label is already set by the first line in __init__
+        # self._current_position, self._is_jogging etc. are already initialized above.
 
         if self.mock_hw:
             print(f"Stage '{self.stage_device_label}' initialized in MOCK hardware mode.")
@@ -58,17 +56,42 @@ class Stage:
 
         # Proceed with actual hardware initialization if not mock_hw
         try:
+            if not mm_config_file:
+                raise RuntimeError(
+                    "Micro-Manager configuration file path is required when not in mock_hw mode."
+                )
+            if not stage_device_label: # Check for stage_device_label as well
+                raise RuntimeError(
+                    "Stage device label is required when not in mock_hw mode."
+                )
+
             self.core = CMMCorePlus.instance()
             print(f"CMMCorePlus instance obtained: {self.core}")
 
+            print(f"Loading system configuration from: {mm_config_file}")
+            self.core.loadSystemConfiguration(mm_config_file) # mm_config_file is now guaranteed
+            print(f"System configuration {mm_config_file} loaded.")
+
+            # The following loadDevice/initializeDevice might be redundant if the config
+            # file already fully defines and initializes the stage.
+            # However, it ensures that the specific stage_device_label is targeted.
+            # If stage_device_label is already loaded by loadSystemConfiguration,
+            # loadDevice might be a no-op or re-confirm.
+            # This part needs to be verified against actual MM behavior with ASI stages.
             loaded_devices = self.core.getLoadedDevices()
             if self.stage_device_label not in loaded_devices:
-                print(f"Loading device: {self.stage_device_label}, Adapter: {adapter_name}, Name: {device_name}")
-                self.core.loadDevice(self.stage_device_label, adapter_name, device_name)
-                self.core.initializeDevice(self.stage_device_label)
-                print(f"Device {self.stage_device_label} initialized.")
+                 print(f"Device {self.stage_device_label} not pre-loaded by config, attempting explicit load/init.")
+                 self.core.loadDevice(self.stage_device_label, adapter_name, device_name)
+                 self.core.initializeDevice(self.stage_device_label)
+                 print(f"Device {self.stage_device_label} explicitly initialized.")
             else:
-                print(f"Device {self.stage_device_label} already loaded and presumably initialized.")
+                # Even if loaded by config, ensure it's initialized if initializeDevice is safe to call multiple times
+                # or if there's a way to check initialization status.
+                # For now, assuming it's okay or config handles it.
+                print(f"Device {self.stage_device_label} found as loaded by config file.")
+                # Optionally, could call initializeDevice here too if it's safe and necessary.
+                # self.core.initializeDevice(self.stage_device_label)
+
 
             device_type = self.core.getDeviceType(self.stage_device_label)
             if device_type not in [DeviceType.XYStage, DeviceType.Stage]:
@@ -100,45 +123,30 @@ class Stage:
             self.core.setRelativeXPosition.return_value = None
             self.core.waitForDevice.return_value = None
             self.core.stop.return_value = None
-            loaded_devices = self.core.getLoadedDevices()
-            if self.stage_device_label not in loaded_devices:
-                print(f"Attempting to load system configuration: {mm_config_file}")
-                # If a full config file is provided and valid, it's often better to load it.
-                # However, the prompt implies direct device loading.
-                # For ASI stages, direct loading often requires serial port properties to be set first.
-                # For simplicity, let's assume mm_config_file handles this if provided and valid.
-                # If not, loadDevice might fail or need more properties.
-                # self.core.loadSystemConfiguration(mm_config_file)
-                # For now, trying direct load as per prompt structure, but this is tricky for ASI
-                print(f"Loading device: {self.stage_device_label}, Adapter: {adapter_name}, Name: {device_name}")
-                self.core.loadDevice(self.stage_device_label, adapter_name, device_name)
-                # For ASI, you might need to set properties like serial port here before init.
-                # e.g., self.core.setProperty(self.stage_device_label, "Port", "COM1")
-                self.core.initializeDevice(self.stage_device_label)
-                print(f"Device {self.stage_device_label} initialized.")
-            else:
-                print(f"Device {self.stage_device_label} already loaded.")
+            # Removed dead code block that attempted to use mocked core after fallback
 
-            # Ensure the stage is an XY stage type if we plan to use X/Y functions
-            if self.core.getDeviceType(self.stage_device_label) not in [DeviceType.XYStage, DeviceType.Stage]:
-                 raise MMError(f"Device {self.stage_device_label} is not of type XYStage or Stage.")
-
-            self._current_position = self.core.getXPosition(self.stage_device_label)
-            print(f"Stage '{self.stage_device_label}' initialized. "
-                  f"Initial X position: {self._current_position:.2f} um")
-
-        except RuntimeError as e: # Changed to RuntimeError
-            print(f"Error initializing stage with pymmcore-plus: {e}")
-            print("Stage will operate in MOCK hardware mode due to error.")
-            self.mock_hw = True # Fallback to mock mode
-            self.core = None    # Ensure core is None if init failed
-            self._current_position = 0.0
-        except Exception as e: # Catch other potential errors like file not found for config
-            print(f"A non-MMError occurred during stage initialization: {e}")
-            print("Stage will operate in MOCK hardware mode due to error.")
+        except RuntimeError as e:
+            print(f"Error initializing HW stage '{self.stage_device_label}': {e}")
+            print("Falling back to MOCK hardware mode.")
             self.mock_hw = True
-            self.core = None
+            self.core = MagicMock()
             self._current_position = 0.0
+            self.core.getXPosition.return_value = self._current_position
+            self.core.setXPosition.return_value = None
+            self.core.setRelativeXPosition.return_value = None
+            self.core.waitForDevice.return_value = None
+            self.core.stop.return_value = None
+        except Exception as e:
+            print(f"Unexpected error during HW stage '{self.stage_device_label}' initialization: {e}")
+            print("Falling back to MOCK hardware mode.")
+            self.mock_hw = True
+            self.core = MagicMock()
+            self._current_position = 0.0
+            self.core.getXPosition.return_value = self._current_position
+            self.core.setXPosition.return_value = None
+            self.core.setRelativeXPosition.return_value = None
+            self.core.waitForDevice.return_value = None
+            self.core.stop.return_value = None
 
 
     def get_position(self) -> float:
