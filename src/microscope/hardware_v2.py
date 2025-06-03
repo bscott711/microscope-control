@@ -1,7 +1,7 @@
 from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
 from typing import Optional, Dict, Tuple, Any
 import traceback
-import time  # Added for time.sleep in set_crisp_state
+import time  # Added for time.sleep in set_crisp_state and movement tests
 import os  # For path joining if needed
 
 # Initialize global core instance
@@ -218,7 +218,7 @@ class HardwareInterface:
             mmc.setXYPosition(x, y)
             if wait:
                 mmc.waitForDevice(self.xy_stage)
-            print(f"Moved XY to ({x}, {y})")
+            print(f"Moved XY to ({x:.2f}, {y:.2f})")  # Added formatting
         except Exception as e:
             print(f"Error moving XY stage: {e}")
             traceback.print_exc()
@@ -254,7 +254,7 @@ class HardwareInterface:
             mmc.setPosition(self.main_z_objective, z_um)
             if wait:
                 mmc.waitForDevice(self.main_z_objective)
-            print(f"Moved Main Z Objective to {z_um} µm")
+            print(f"Moved Main Z Objective to {z_um:.2f} µm")  # Added formatting
         except Exception as e:
             print(f"Error moving Main Z Objective: {e}")
             traceback.print_exc()
@@ -270,9 +270,7 @@ class HardwareInterface:
             traceback.print_exc()
             return None
 
-    def set_p_objective_position(
-        self, position_um: float, wait: bool = True
-    ):  # New method
+    def set_p_objective_position(self, position_um: float, wait: bool = True):
         """Sets the position of the P objective piezo stage (PiezoStage:P:34)."""
         if self.crisp_o3_piezo_stage not in mmc.getLoadedDevices():
             print(
@@ -283,12 +281,14 @@ class HardwareInterface:
             mmc.setPosition(self.crisp_o3_piezo_stage, position_um)
             if wait:
                 mmc.waitForDevice(self.crisp_o3_piezo_stage)
-            print(f"Moved P Objective Piezo to {position_um} µm")
+            print(
+                f"Moved P Objective Piezo to {position_um:.3f} µm"
+            )  # Added formatting
         except Exception as e:
             print(f"Error moving P Objective Piezo: {e}")
             traceback.print_exc()
 
-    def get_p_objective_position(self) -> Optional[float]:  # New method
+    def get_p_objective_position(self) -> Optional[float]:
         """Gets the position of the P objective piezo stage (PiezoStage:P:34)."""
         if self.crisp_o3_piezo_stage not in mmc.getLoadedDevices():
             print(
@@ -354,7 +354,9 @@ class HardwareInterface:
                 return
 
             mmc.setProperty(self.galvo_scanner, property_name, float(value))
-            print(f"Set Galvo property '{property_name}' to {value}")
+            print(
+                f"Set Galvo property '{property_name}' to {value:.4f}"
+            )  # Added formatting
         except Exception as e:
             print(f"Error setting galvo property '{property_name}': {e}")
             traceback.print_exc()
@@ -379,7 +381,7 @@ class HardwareInterface:
             mmc.setPosition(self.light_sheet_tilt, tilt_um)
             if wait:
                 mmc.waitForDevice(self.light_sheet_tilt)
-            print(f"Moved Light Sheet Tilt to {tilt_um} µm")
+            print(f"Moved Light Sheet Tilt to {tilt_um:.2f} µm")  # Added formatting
         except Exception as e:
             print(f"Error moving Light Sheet Tilt: {e}")
             traceback.print_exc()
@@ -407,16 +409,13 @@ class HardwareInterface:
             if wait:
                 mmc.waitForDevice(self.crisp_o1_focus_stage)
             print(
-                f"Moved CRISP O1 target focus (stage {self.crisp_o1_focus_stage}) to {z_um} µm"
+                f"Moved CRISP O1 target focus (stage {self.crisp_o1_focus_stage}) to {z_um:.2f} µm"
             )
         except Exception as e:
             print(f"Error moving CRISP O1 target focus: {e}")
             traceback.print_exc()
 
     def move_crisp_o3_target_focus(self, piezo_um: float, wait: bool = True):
-        # This method now effectively becomes an alias for set_p_objective_position
-        # if crisp_o3_piezo_stage is the P:34 device.
-        # Keeping it for conceptual clarity if CRISP target is thought of separately.
         print(
             f"Note: move_crisp_o3_target_focus calls set_p_objective_position for stage '{self.crisp_o3_piezo_stage}'."
         )
@@ -425,7 +424,7 @@ class HardwareInterface:
     def get_target_focus_positions(self) -> Dict[str, Optional[float]]:
         return {
             "O1_target_focus_um": self.get_position_safe(self.crisp_o1_focus_stage),
-            "O3_target_focus_um": self.get_p_objective_position(),  # Use the new getter
+            "O3_target_focus_um": self.get_p_objective_position(),
         }
 
     def get_position_safe(self, device_label: str) -> Optional[float]:
@@ -571,28 +570,17 @@ if __name__ == "__main__":
             print(
                 f"XY Stage ({hw_interface.xy_stage}): X={xy_pos['x']:.2f}, Y={xy_pos['y']:.2f} µm"
             )
-        else:
-            print(f"XY Stage ({hw_interface.xy_stage}): Could not get position.")
 
         z_obj_pos = hw_interface.get_z_objective_position()
         if z_obj_pos is not None:
             print(
                 f"Main Z Objective ({hw_interface.main_z_objective}): {z_obj_pos:.2f} µm"
             )
-        else:
-            print(
-                f"Main Z Objective ({hw_interface.main_z_objective}): Could not get position."
-            )
 
-        # P Objective (Piezo) Position
-        p_obj_pos = hw_interface.get_p_objective_position()  # New call
+        p_obj_pos = hw_interface.get_p_objective_position()
         if p_obj_pos is not None:
             print(
                 f"P Objective Piezo ({hw_interface.crisp_o3_piezo_stage}): {p_obj_pos:.3f} µm"
-            )  # Using .3f for piezo
-        else:
-            print(
-                f"P Objective Piezo ({hw_interface.crisp_o3_piezo_stage}): Could not get position."
             )
 
         galvo_x_offset = hw_interface.get_galvo_x_offset_degrees()
@@ -600,19 +588,11 @@ if __name__ == "__main__":
             print(
                 f"Galvo X Offset ({hw_interface.galvo_scanner}): {galvo_x_offset:.4f} degrees"
             )
-        else:
-            print(
-                f"Galvo X Offset ({hw_interface.galvo_scanner}): Could not get position."
-            )
 
         galvo_y_offset = hw_interface.get_galvo_y_offset_degrees()
         if galvo_y_offset is not None:
             print(
                 f"Galvo Y Offset ({hw_interface.galvo_scanner}): {galvo_y_offset:.4f} degrees"
-            )
-        else:
-            print(
-                f"Galvo Y Offset ({hw_interface.galvo_scanner}): Could not get position."
             )
 
         tilt_pos = hw_interface.get_light_sheet_tilt()
@@ -620,16 +600,10 @@ if __name__ == "__main__":
             print(
                 f"Light Sheet Tilt ({hw_interface.light_sheet_tilt}): {tilt_pos:.2f} µm"
             )
-        else:
-            print(
-                f"Light Sheet Tilt ({hw_interface.light_sheet_tilt}): Could not get position."
-            )
 
         focus_targets = hw_interface.get_target_focus_positions()
         o1_target = focus_targets.get("O1_target_focus_um")
-        o3_target = focus_targets.get(
-            "O3_target_focus_um"
-        )  # This now uses get_p_objective_position
+        o3_target = focus_targets.get("O3_target_focus_um")
         print(
             f"CRISP O1 Target Focus ({hw_interface.crisp_o1_focus_stage}): {o1_target if o1_target is not None else 'N/A'} µm"
         )
@@ -650,7 +624,102 @@ if __name__ == "__main__":
             f"CRISP O3 State ({hw_interface.crisp_o3_autofocus_device}): {crisp3_state if crisp3_state is not None else 'N/A'}"
         )
 
-        print("\n--- End of Hardware State Report ---")
+        print("\n--- Testing Movements ---")
+
+        # Test Z Objective Movement
+        initial_z = hw_interface.get_z_objective_position()
+        if initial_z is not None:
+            target_z = initial_z + 5.0  # Smaller move for safety
+            print(
+                f"\nMoving Main Z Objective from {initial_z:.2f} µm to {target_z:.2f} µm..."
+            )
+            hw_interface.move_z_objective(target_z)
+            time.sleep(1)
+            current_z = hw_interface.get_z_objective_position()
+            print(f"Main Z Objective position after move: {current_z:.2f} µm")
+
+            print(f"Moving Main Z Objective back to {initial_z:.2f} µm...")
+            hw_interface.move_z_objective(initial_z)
+            time.sleep(1)
+            current_z = hw_interface.get_z_objective_position()
+            print(f"Main Z Objective position after moving back: {current_z:.2f} µm")
+        else:
+            print("\nCould not get initial Z objective position, skipping Z move test.")
+
+        # Test XY Stage Movement
+        initial_xy = hw_interface.get_xy_position()
+        if initial_xy:
+            target_x = initial_xy["x"] + 50.0  # Smaller move for safety
+            target_y = initial_xy["y"] - 50.0
+            print(
+                f"\nMoving XY Stage from ({initial_xy['x']:.2f}, {initial_xy['y']:.2f}) µm to ({target_x:.2f}, {target_y:.2f}) µm..."
+            )
+            hw_interface.move_xy(target_x, target_y)
+            time.sleep(2)  # Longer wait for XY potentially
+            current_xy = hw_interface.get_xy_position()
+            if current_xy:
+                print(
+                    f"XY Stage position after move: X={current_xy['x']:.2f}, Y={current_xy['y']:.2f} µm"
+                )
+
+            print(
+                f"Moving XY Stage back to ({initial_xy['x']:.2f}, {initial_xy['y']:.2f}) µm..."
+            )
+            hw_interface.move_xy(initial_xy["x"], initial_xy["y"])
+            time.sleep(2)
+            current_xy = hw_interface.get_xy_position()
+            if current_xy:
+                print(
+                    f"XY Stage position after moving back: X={current_xy['x']:.2f}, Y={current_xy['y']:.2f} µm"
+                )
+        else:
+            print("\nCould not get initial XY stage position, skipping XY move test.")
+
+        # Test P Objective Piezo Movement
+        initial_p_piezo = hw_interface.get_p_objective_position()
+        if initial_p_piezo is not None:
+            target_p_piezo = initial_p_piezo + 1.0  # Small piezo move (e.g., 1 µm)
+            print(
+                f"\nMoving P Objective Piezo from {initial_p_piezo:.3f} µm to {target_p_piezo:.3f} µm..."
+            )
+            hw_interface.set_p_objective_position(target_p_piezo)
+            time.sleep(0.5)  # Piezo is usually fast
+            current_p_piezo = hw_interface.get_p_objective_position()
+            print(f"P Objective Piezo position after move: {current_p_piezo:.3f} µm")
+
+            print(f"Moving P Objective Piezo back to {initial_p_piezo:.3f} µm...")
+            hw_interface.set_p_objective_position(initial_p_piezo)
+            time.sleep(0.5)
+            current_p_piezo = hw_interface.get_p_objective_position()
+            print(
+                f"P Objective Piezo position after moving back: {current_p_piezo:.3f} µm"
+            )
+        else:
+            print(
+                "\nCould not get initial P Objective Piezo position, skipping its move test."
+            )
+
+        # Test Galvo X Offset Setting
+        initial_galvo_x = hw_interface.get_galvo_x_offset_degrees()
+        if initial_galvo_x is not None:
+            target_galvo_x = initial_galvo_x + 0.01  # Small degree change
+            print(
+                f"\nSetting Galvo X Offset from {initial_galvo_x:.4f} deg to {target_galvo_x:.4f} deg..."
+            )
+            hw_interface.set_galvo_x_offset_degrees(target_galvo_x)
+            time.sleep(0.2)  # Galvos are usually fast
+            current_galvo_x = hw_interface.get_galvo_x_offset_degrees()
+            print(f"Galvo X Offset after set: {current_galvo_x:.4f} deg")
+
+            print(f"Setting Galvo X Offset back to {initial_galvo_x:.4f} deg...")
+            hw_interface.set_galvo_x_offset_degrees(initial_galvo_x)
+            time.sleep(0.2)
+            current_galvo_x = hw_interface.get_galvo_x_offset_degrees()
+            print(f"Galvo X Offset after setting back: {current_galvo_x:.4f} deg")
+        else:
+            print("\nCould not get initial Galvo X Offset, skipping its set test.")
+
+        print("\n--- End of Movement Tests ---")
 
     except FileNotFoundError as e:
         print(f"Initialization failed due to missing or unconfirmed configuration: {e}")
