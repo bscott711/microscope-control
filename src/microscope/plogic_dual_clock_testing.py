@@ -7,7 +7,7 @@ import traceback
 mmc = CMMCorePlus.instance()
 
 # --- User Editable Parameters for BNC1 (Slow Pulse) ---
-bnc1_frequency_hz = 50  # e.g., 50 Hz 
+bnc1_frequency_hz = 50  # e.g., 50 Hz
 bnc1_pulse_duration_ms = 10.0  # Duration of the high pulse in milliseconds
 
 # --- User Editable Parameters for BNC2 (Fast Clock) ---

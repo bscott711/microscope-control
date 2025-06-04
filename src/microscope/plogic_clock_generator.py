@@ -7,7 +7,7 @@ import traceback
 mmc = CMMCorePlus.instance()
 
 # --- User Editable Parameters ---
-clockFrequencyHz = 100.0  # Clock frequency in Hertz
+clockFrequencyHz = 2  # Clock frequency in Hertz
 clockDutyCycle = 0.5  # Should be between 0 and 1 exclusive
 
 # --- PLogic Constants (Should not need editing unless hardware/config changes) ---
@@ -37,7 +37,9 @@ addrDelayNRT = 1
 addrOneShot = 2
 
 # BNC Output addresses (check PLogic manual/config)
-# BNC 1 = 33, BNC 2 = 34, BNC 3 = 35, BNC 4 = 36, etc.
+# BNC 1 = 33, BNC 2 = 34, BNC 3 = 35, BNC 4 = 36
+# BNC 5 = 37, BNC 6 = 38, # BNC 7 = 39, BNC 8 = 40
+
 addrOutputBNC2 = 34  # Address for BNC output #2
 
 
