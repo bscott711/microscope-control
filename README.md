@@ -193,3 +193,28 @@ We welcome contributions to the OPM Microscope Control System! If you're interes
 8. **Open a Pull Request** against the `main` (or `develop`) branch of the original repository. Please provide a detailed description of your changes in the PR.
 
 ---
+
+## Running with `pymmcore-gui`
+
+This project can be controlled using `pymmcore-gui`, a graphical user interface
+based on `pymmcore-plus` and `pymmcore-widgets`.
+
+**Prerequisites:**
+
+*   Ensure all dependencies are installed, including `pymmcore-gui`. If you're working
+    from a cloned repository, you might need to install it directly from its
+    source if it's not yet on PyPI, or ensure your `pyproject.toml` points to it correctly.
+    The project should be set up to handle this (e.g., via `uv pip install -e .`).
+*   A valid Micro-Manager hardware configuration file (`.cfg`) is required. The default
+    is `hardware_profiles/20250523-OPM.cfg`.
+
+**Launching the GUI:**
+
+To launch the `pymmcore-gui` interface, run the following script from the project root:
+
+```bash
+python src/microscope/run_gui.py
+```
+
+This script will initialize the `HardwareInterface` with the default configuration
+file and then start the `pymmcore-gui` application.

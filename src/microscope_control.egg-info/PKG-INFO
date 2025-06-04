@@ -7,6 +7,7 @@ License-Expression: MIT
 Project-URL: Homepage, https://github.com/bscott711/microscope-control
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+Requires-Dist: pymmcore-gui@ git+https://github.com/tlambert03/pymmcore-gui.git
 Requires-Dist: pymmcore-plus[cli,io]>=0.1
 Requires-Dist: useq-schema>=0.7
 Requires-Dist: napari>=0.6

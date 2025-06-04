@@ -1,3 +1,4 @@
+pymmcore-gui@ git+https://github.com/tlambert03/pymmcore-gui.git
 pymmcore-plus[cli,io]>=0.1
 useq-schema>=0.7
 napari>=0.6
