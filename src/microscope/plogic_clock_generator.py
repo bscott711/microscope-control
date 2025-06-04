@@ -20,6 +20,7 @@ propCellConfig = "EditCellConfig"
 propCellInput1 = "EditCellInput1"
 propCellInput2 = "EditCellInput2"
 propUpdates = "EditCellUpdateAutomatically"
+propSaveSettings = "SaveCardSettings"  # For saving to card
 
 # Property values/modes
 valNo = "No"
@@ -29,6 +30,7 @@ valOneShotNRT = "14 - one shot (NRT)"  # Non-ReTriggerable one-shot
 # PLogic internal addresses/constants
 addrInvert = 64  # Bitmask for inverting input
 addrEdge = 128  # Bitmask for triggering on edge (vs level)
+valSaveSettings = "Z - save settings to card (partial)"  # For saving to card
 ticsPerSecond = 4000.0  # Internal PLogic clock frequency
 
 # Cell addresses (arbitrarily chosen free cells, check PLogic manual/config)
@@ -36,11 +38,15 @@ ticsPerSecond = 4000.0  # Internal PLogic clock frequency
 addrDelayNRT = 1
 addrOneShot = 2
 
+addrCellAlwaysLow = 0  # PLogic cell 0 is typically GND/LOW
+addrCellAlwaysHigh = 63  # PLogic cell 63 is typically VCC/HIGH
+
 # BNC Output addresses (check PLogic manual/config)
 # BNC 1 = 33, BNC 2 = 34, BNC 3 = 35, BNC 4 = 36
 # BNC 5 = 37, BNC 6 = 38, # BNC 7 = 39, BNC 8 = 40
 
-addrOutputBNC2 = 34  # Address for BNC output #2
+addrOutputBNC3 = 35  # Address for BNC output #3
+addrOutputBNC = 40  # Address for BNC output #8
 
 
 def program_plogic_clock(
@@ -178,6 +184,112 @@ def program_plogic_clock(
                 traceback.print_exc()
 
 
+def set_plogic_bnc_state_and_save(
+    mmc_core: CMMCorePlus, bnc_address: int, state: str, verbose: bool = False
+) -> bool:
+    """
+    Sets a specified PLogic BNC output to a given state (high or low)
+    and saves the settings to the PLogic card. Simplified for speed
+    and with a verbose option.
+
+    Args:
+        mmc_core: An initialized CMMCorePlus instance.
+        bnc_address: The internal PLogic address for the target BNC output
+                     (e.g., 33 for BNC1, 34 for BNC2, 35 for BNC3, etc.).
+        state: The desired state for the BNC output, either "high" or "low".
+        verbose: If True, prints detailed operational messages. Defaults to False.
+
+    Returns:
+        True if all operations were successful, False otherwise.
+    """
+    plc_name = "PLogic:E:36"
+    prop_position = "PointerPosition"
+    prop_cell_config = "EditCellConfig"
+    prop_save_settings = "SaveCardSettings"
+
+    val_save_settings = "Z - save settings to card (partial)"
+
+    config_val_for_state: str
+    descriptive_state_name: str
+
+    if state.lower() == "high":
+        config_val_for_state = "64"  # Assumed value for 'always high'
+        descriptive_state_name = "high"
+    elif state.lower() == "low":
+        config_val_for_state = "0"  # Assumed value for 'always low' (mirrors Cell 0)
+        descriptive_state_name = "low"
+    else:
+        print(
+            f"Error: Invalid state '{state}' provided to set_plogic_bnc_state_and_save. "
+            "Must be 'high' or 'low'."
+        )
+        return False
+
+    # Validate bnc_address (PLogic typically has addresses for BNCs from 33 to 40 for BNC1-8)
+    if not (33 <= bnc_address <= 40):  # Common range for BNC outputs 1-8
+        print(
+            f"Error: BNC address {bnc_address} is outside the typical range "
+            "for PLogic BNC outputs (33-40). Cannot proceed."
+        )
+        return False  # Made this a hard error for safety
+
+    if plc_name not in mmc_core.getLoadedDevices():
+        print(f"Error: PLogic device '{plc_name}' not found in loaded devices.")
+        return False
+
+    success = False
+    try:
+        if verbose:
+            print(
+                f"Configuring PLogic output at address {bnc_address} "
+                f"to be '{descriptive_state_name}'..."
+            )
+
+        # 1. Set PointerPosition to the target BNC output cell
+        if verbose:
+            print(
+                f"  Setting PLogic '{prop_position}' to '{str(bnc_address)}' (for BNC at address {bnc_address})."
+            )
+        mmc_core.setProperty(plc_name, prop_position, str(bnc_address))
+        time.sleep(0.05)  # Crucial small delay after changing pointer
+
+        # 2. Set EditCellConfig for the BNC output.
+        if verbose:
+            print(
+                f"  Setting PLogic '{prop_cell_config}' for BNC at address {bnc_address} to "
+                f"'{config_val_for_state}' (for {descriptive_state_name} state)."
+            )
+        mmc_core.setProperty(plc_name, prop_cell_config, config_val_for_state)
+        time.sleep(0.05)  # Crucial small delay after setting config
+
+        # 3. Save the settings to the PLogic card
+        if verbose:
+            print(f"  Setting PLogic '{prop_save_settings}' to '{val_save_settings}'.")
+        mmc_core.setProperty(plc_name, prop_save_settings, val_save_settings)
+
+        if verbose:
+            print("  Waiting for PLogic settings to save...")
+        time.sleep(0.5)  # Delay for save operation to complete on hardware
+
+        if verbose:
+            print(
+                f"Successfully configured PLogic BNC at address {bnc_address} to '{descriptive_state_name}' and saved settings."
+            )
+        success = True
+
+    except Exception as e:
+        # This error will always print
+        print(
+            f"Error during PLogic configuration for BNC at address {bnc_address} to '{descriptive_state_name}': {e}"
+        )
+        # For more detailed debugging:
+        # import traceback
+        # traceback.print_exc()
+        success = False
+
+    return success
+
+
 def stop_plogic_clock_output(
     mmc_core: CMMCorePlus,
     output_bnc_address: int,
@@ -284,18 +396,29 @@ if __name__ == "__main__":
         is_plogic_loaded_at_start = True  # Set flag
         print(f"PLogic device '{plcName}' found.")
 
+        # Set BNC3 (addrOutputBNC3) HIGH on script start
+        print(
+            f"\nSetting BNC {addrOutputBNC3} (Global Shutter) to HIGH on script start..."
+        )
+        if not set_plogic_bnc_state_and_save(
+            mmc, addrOutputBNC3, "high", verbose=False
+        ):
+            print(f"Warning: Failed to set BNC {addrOutputBNC3} HIGH on startup.")
+        else:
+            print(f"BNC {addrOutputBNC3} set HIGH.")
+
         # Program the clock
         success = program_plogic_clock(
             mmc,
             clockFrequencyHz,
             clockDutyCycle,
-            addrOutputBNC2,  # Output to BNC 2
+            addrOutputBNC,  # Output to BNC
             plcName,
         )
 
         if success:
             print(
-                "\nPLogic programmed successfully. The clock signal should now be active on BNC 2."
+                "\nPLogic programmed successfully. The clock signal should now be active on BNC 8."
             )
             print(
                 "You may need to keep this script or your main application running for the clock to persist."
@@ -316,8 +439,16 @@ if __name__ == "__main__":
 
     finally:
         # Attempt to stop the clock output before unloading devices
-        if is_plogic_loaded_at_start:  # Only try to stop if PLogic was loaded
-            stop_plogic_clock_output(mmc, addrOutputBNC2, plcName)
+        if is_plogic_loaded_at_start:  # Only try if PLogic was loaded
+            # Stop the clock if it was running on addrOutputBNC
+            # This also sets addrOutputBNC's source to cell 0.
+            stop_plogic_clock_output(mmc, addrOutputBNC, plcName)
+
+            # Explicitly set BNC3 (addrOutputBNC) to LOW and save this state.
+            print(
+                f"\nSetting BNC {addrOutputBNC} (Global Shutter) to LOW and saving settings on exit..."
+            )
+            set_plogic_bnc_state_and_save(mmc, addrOutputBNC3, "low", verbose=False)
 
         # Clean up MMCore
         print("\nUnloading all devices and resetting MMCore...")

@@ -17,6 +17,13 @@ PLOGIC_OUTPUT_CHANNEL_PROP = (
     "OutputChannel"  # Property to select a single channel in some modes
 )
 PLOGIC_MODE_PROP = "PLogicMode"
+PLOGIC_POINTER_POSITION_PROP = "PointerPosition"
+PLOGIC_EDIT_CELL_CONFIG_PROP = "EditCellConfig"
+PLOGIC_SAVE_SETTINGS_PROP = "SaveCardSettings"
+PLOGIC_VAL_SAVE_SETTINGS = "Z - save settings to card (partial)"  # From user snippet
+
+PLOGIC_CELL_ADDR_ALWAYS_LOW = 0  # PLogic cell 0 is typically GND/LOW
+PLOGIC_CELL_ADDR_ALWAYS_HIGH = 63  # PLogic cell 63 is typically VCC/HIGH
 
 # Common Camera Properties
 CAMERA_TRIGGER_MODE_PROP = "TriggerMode"
@@ -146,6 +153,19 @@ class HardwareInterface:
             print(
                 f"HardwareInterface initialized. Effective config: {mmc.systemConfigurationFile()}"
             )
+            # Set global shutter (BNC3) HIGH on startup using the new method
+            print(
+                "Attempting to set global shutter (PLogic BNC3) HIGH via EditCellConfig..."
+            )
+            if not self._set_bnc_line_state(
+                bnc_line_number=3, high=True, save_settings=True
+            ):
+                print(
+                    "Warning: Failed to set and save global shutter (PLogic BNC3) HIGH on startup."
+                )
+            else:
+                print("Global shutter (PLogic BNC3) set HIGH.")
+
             print(f"Loaded devices: {mmc.getLoadedDevices()}")
 
     def _set_default_stages(self):
@@ -608,6 +628,81 @@ class HardwareInterface:
             print(f"Error getting PLogic prop '{PLOGIC_OUTPUT_STATE_PROP}': {e}")
             return None
 
+    def _set_bnc_line_state(
+        self, bnc_line_number: int, high: bool, save_settings: bool = False
+    ) -> bool:
+        """
+        Sets a specific PLogic BNC line HIGH or LOW using the EditCellConfig method.
+        This configures the BNC output cell to mirror an "always HIGH" (cell 63)
+        or "always LOW" (cell 0) PLogic internal cell.
+
+        BNC lines are 1-indexed.
+
+        Args:
+            bnc_line_number: The 1-indexed BNC line (1-8).
+            high: True to set the BNC line HIGH, False to set it LOW.
+            save_settings: If True, attempts to save the setting to the PLogic card.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        if self.plogic_lasers not in mmc.getLoadedDevices():
+            print(
+                f"Error: PLogic device '{self.plogic_lasers}' not found for BNC control."
+            )
+            return False
+
+        if not (
+            1 <= bnc_line_number <= 8
+        ):  # PLogic typically has 8 TTL outputs (BNC1-8)
+            print(f"Error: bnc_line_number {bnc_line_number} is out of range (1-8).")
+            return False
+
+        # PLogic BNC output cells are typically addressed starting from 33 for BNC1
+        # BNC1 -> 33, BNC2 -> 34, ..., BNC8 -> 40
+        plogic_output_cell_address = bnc_line_number + 32
+
+        target_source_cell = (
+            PLOGIC_CELL_ADDR_ALWAYS_HIGH if high else PLOGIC_CELL_ADDR_ALWAYS_LOW
+        )
+
+        action = "HIGH" if high else "LOW"
+        print(
+            f"PLogic: Setting BNC {bnc_line_number} (output cell {plogic_output_cell_address}) to {action} "
+            f"by pointing to cell {target_source_cell}."
+        )
+
+        try:
+            mmc.setProperty(
+                self.plogic_lasers,
+                PLOGIC_POINTER_POSITION_PROP,
+                str(plogic_output_cell_address),
+            )
+            time.sleep(0.05)  # Short delay
+            mmc.setProperty(
+                self.plogic_lasers,
+                PLOGIC_EDIT_CELL_CONFIG_PROP,
+                str(target_source_cell),
+            )
+            time.sleep(0.05)  # Short delay
+
+            if save_settings:
+                print(
+                    f"  Saving PLogic settings to card ({PLOGIC_VAL_SAVE_SETTINGS})..."
+                )
+                mmc.setProperty(
+                    self.plogic_lasers,
+                    PLOGIC_SAVE_SETTINGS_PROP,
+                    PLOGIC_VAL_SAVE_SETTINGS,
+                )
+                time.sleep(0.1)  # Saving might take a bit longer
+            print(f"PLogic: BNC {bnc_line_number} successfully set to {action}.")
+            return True
+        except Exception as e:
+            print(f"Error setting PLogic BNC {bnc_line_number} state: {e}")
+            traceback.print_exc()
+            return False
+
     # --- Camera Control ---
     def get_camera_trigger_mode(self, camera_label: str) -> Optional[str]:
         if camera_label not in mmc.getLoadedDevices():
@@ -759,6 +854,25 @@ class HardwareInterface:
     # --- System Shutdown ---
     def shutdown_hardware(self, reset_core: bool = True):
         print("Shutting down hardware interface...")
+
+        # Set global shutter (BNC3) LOW on shutdown using the new method
+        print(
+            "Attempting to set global shutter (PLogic BNC3) LOW via EditCellConfig before shutdown..."
+        )
+        if self.plogic_lasers in mmc.getLoadedDevices():
+            if not self._set_bnc_line_state(
+                bnc_line_number=3, high=False, save_settings=True
+            ):
+                print(
+                    "Warning: Failed to set and save global shutter (PLogic BNC3) LOW on shutdown."
+                )
+            else:
+                print("Global shutter (PLogic BNC3) set LOW.")
+        else:
+            print(
+                f"PLogic device '{self.plogic_lasers}' not loaded, cannot set BNC3 LOW during shutdown."
+            )
+
         if reset_core:
             mmc.reset()
             print("MMCore reset.")

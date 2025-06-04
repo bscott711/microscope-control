@@ -7,12 +7,12 @@ import traceback
 mmc = CMMCorePlus.instance()
 
 # --- User Editable Parameters for BNC1 (Slow Pulse) ---
-bnc1_frequency_hz = 50  # e.g., 50 Hz
+bnc1_frequency_hz = 2  # e.g., 50 Hz
 bnc1_pulse_duration_ms = 10.0  # Duration of the high pulse in milliseconds
 
 # --- User Editable Parameters for BNC2 (Fast Clock) ---
-bnc2_frequency_hz = 100.0  # Clock frequency in Hertz
-bnc2_duty_cycle = 0.5  # Should be between 0 and 1 exclusive
+bnc2_frequency_hz = 1  # Clock frequency in Hertz
+bnc2_duty_cycle = 0.99  # Should be between 0 and 1 exclusive
 
 # --- PLogic Device Constants ---
 plcName = "PLogic:E:36"  # Device label for the PLogic card
@@ -36,9 +36,11 @@ addrEdge = 128  # Bitmask for triggering on edge (vs level)
 ticsPerSecond = 4000.0  # Internal PLogic clock frequency
 
 # BNC Output addresses (check PLogic manual/config)
-# BNC 1 = 33, BNC 2 = 34, BNC 3 = 35, BNC 4 = 36, etc.
-addrOutputBNC1 = 33  # Address for BNC output #1
-addrOutputBNC2 = 34  # Address for BNC output #2
+# BNC 1 = 33, BNC 2 = 34, BNC 3 = 35, BNC 4 = 36
+# BNC 5 = 37, BNC 6 = 38, BNC 7 = 39, BNC 8 = 40
+
+addrOutputBNC1 = 40  # Address for BNC output #1
+addrOutputBNC2 = 35  # Address for BNC output #2
 
 # Cell addresses for BNC1 clock (e.g., cells 3 and 4)
 bnc1_addr_delay_nrt = 3
