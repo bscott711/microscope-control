@@ -1,13 +1,13 @@
 [project]
 name = "microscope-control"
 version = "0.1.0"
-dependencies =[
- "pymmcore-plus[cli,io]>=0.1",
-    "useq-schema>=0.7",
-    "napari[pyqt6]>=0.6", 
-    "magicgui>=0.5", 
-    "numpy>=1.23",
-    "inputs>=0.5",
+dependencies = [
+  "pymmcore-plus[cli,io]>=0.1",
+  "useq-schema>=0.7",
+  "napari[pyqt6]>=0.6",
+  "magicgui>=0.5",
+  "numpy>=1.23",
+  "inputs>=0.5",
 ]
 requires-python = ">=3.10"
 authors = [
@@ -15,7 +15,7 @@ authors = [
 ]
 description = "OPM Microscope Control System"
 readme = "README.md"
-license =  "MIT"
+license = "MIT"
 
 [project.optional-dependencies]
 dev = [
