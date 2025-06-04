@@ -48,20 +48,6 @@ coverage.xml
 *.py,cover
 .hypothesis/
 
-# Django stuff
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-instance/
-# Files in Django's media folder, often images and user-uploaded files
-media/
-
-# Flask stuff
-instance/
-.webassets-cache
-# Migrations should always be ignored in favor of generated migrations based on model changes.
-*/migrations/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -75,22 +61,9 @@ ENV/
 env.bak/
 venv.bak/
 
-# Spyder project files
-.spyderproject
-.spyproject
-
-# Rope project files
-.ropeproject
-
-# PyCharm files
-.idea/
-
 # VSCode files
 .vscode/
 
-# Eclipse files
-.project
-.pydevproject
 # CDT-generated files
 .cproject
 
@@ -99,8 +72,6 @@ venv.bak/
 .dmypy.json
 dmypy.json
 
-# Pyre type checker
-.pyre/
 
 # pytest cache
 .pytest_cache/
@@ -117,14 +88,6 @@ dmypy.json
 ehthumbs.db
 Thumbs.db
 
-# Config files (if they contain secrets or are user-specific)
-# Consider adding specific names if general patterns are too broad
-# config.yaml
-# config.json
-# secrets.yaml
-# secrets.json
-# .secrets.toml
-# If you have secrets, consider using a .env file (already listed) or git-crypt.
 
 # Log files
 *.log
@@ -139,3 +102,6 @@ logs/
 *.orig
 temp/
 tmp/
+
+# Generated tifs
+snapped_images/

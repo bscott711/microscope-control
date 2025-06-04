@@ -4,7 +4,7 @@ version = "0.1.0"
 dependencies =[
  "pymmcore-plus[cli,io]>=0.1",
     "useq-schema>=0.7",
-    "napari>=0.6", 
+    "napari[pyqt6]>=0.6", 
     "magicgui>=0.5", 
     "numpy>=1.23",
     "inputs>=0.5",
@@ -35,4 +35,4 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project.entry-points."napari.manifest"]
-"microscope-control-stage" = "microscope_control.widgets.stage_control_widget:StageControlWidget"
+# "microscope-control" = "microscope_control"

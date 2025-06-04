@@ -1,0 +1,7 @@
+name: microscope-control # Must match the key in pyproject.toml's napari.manifest entry point
+display_name: OPM Microscope Control
+
+contributions:
+  widgets:
+    - command: microscope_control.widgets.stage_control_widget:StageControlWidget
+      display_name: Stage Control

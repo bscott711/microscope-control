@@ -1,12 +1,15 @@
-from pymmcore_plus import CMMCorePlus, DeviceType # Keep CMMCorePlus for non-mock path
-from unittest.mock import MagicMock # For mock_hw mode
+from pymmcore_plus import CMMCorePlus, DeviceType  # Keep CMMCorePlus for non-mock path
+from unittest.mock import MagicMock  # For mock_hw mode
 # Using RuntimeError as MMError is elusive and pymmcore-plus seems to handle/raise RuntimeErrors
 
 # Default values - these should ideally come from a config or be passed appropriately
-DEFAULT_MM_CONFIG_FILE = "path/to/your/mm_config.cfg" # Needs to be a real path for actual use
-DEFAULT_STAGE_LABEL = "ASI XYStage" # Example, verify with your MM setup
-ADAPTER_NAME = "ASIStage" # Example, verify with your MM setup for ASI
-DEVICE_NAME = "XYStage"   # Example, verify with your MM setup for ASI
+DEFAULT_MM_CONFIG_FILE = (
+    "hardware_profiles\\20250523-OPM.cfg"  # Needs to be a real path for actual use
+)
+DEFAULT_STAGE_LABEL = "ASI XYStage"  # Example, verify with your MM setup
+ADAPTER_NAME = "ASIStage"  # Example, verify with your MM setup for ASI
+DEVICE_NAME = "XYStage"  # Example, verify with your MM setup for ASI
+
 
 class Stage:
     """
@@ -14,13 +17,14 @@ class Stage:
     using pymmcore-plus.
     """
 
-    def __init__(self,
-                 mm_config_file: str = DEFAULT_MM_CONFIG_FILE,
-                 stage_device_label: str = DEFAULT_STAGE_LABEL,
-                 adapter_name: str = ADAPTER_NAME,
-                 device_name: str = DEVICE_NAME,
-                 mock_hw: bool = False # For testing without real hardware/config
-                ):
+    def __init__(
+        self,
+        mm_config_file: str = DEFAULT_MM_CONFIG_FILE,
+        stage_device_label: str = DEFAULT_STAGE_LABEL,
+        adapter_name: str = ADAPTER_NAME,
+        device_name: str = DEVICE_NAME,
+        mock_hw: bool = False,  # For testing without real hardware/config
+    ):
         """
         Initializes the stage using pymmcore-plus.
 
@@ -34,8 +38,10 @@ class Stage:
         """
         self.stage_device_label = stage_device_label
         self._current_position: float = 0.0  # Cache for current position
-        self._is_jogging: bool = False # Represents if a jog command sequence is active
-        self._jog_speed: float = 0.0 # Already initialized earlier, ensure no re-init here
+        self._is_jogging: bool = False  # Represents if a jog command sequence is active
+        self._jog_speed: float = (
+            0.0  # Already initialized earlier, ensure no re-init here
+        )
         self._jog_direction: str = ""
 
         self.mock_hw = mock_hw
@@ -43,8 +49,10 @@ class Stage:
         # self._current_position, self._is_jogging etc. are already initialized above.
 
         if self.mock_hw:
-            print(f"Stage '{self.stage_device_label}' initialized in MOCK hardware mode.")
-            self.core = MagicMock() # No spec, more flexible for mock-only behavior
+            print(
+                f"Stage '{self.stage_device_label}' initialized in MOCK hardware mode."
+            )
+            self.core = MagicMock()  # No spec, more flexible for mock-only behavior
             self._current_position = 0.0
             self.core.getXPosition.return_value = self._current_position
             # Ensure all methods called by Stage methods exist on the MagicMock
@@ -60,7 +68,7 @@ class Stage:
                 raise RuntimeError(
                     "Micro-Manager configuration file path is required when not in mock_hw mode."
                 )
-            if not stage_device_label: # Check for stage_device_label as well
+            if not stage_device_label:  # Check for stage_device_label as well
                 raise RuntimeError(
                     "Stage device label is required when not in mock_hw mode."
                 )
@@ -69,7 +77,9 @@ class Stage:
             print(f"CMMCorePlus instance obtained: {self.core}")
 
             print(f"Loading system configuration from: {mm_config_file}")
-            self.core.loadSystemConfiguration(mm_config_file) # mm_config_file is now guaranteed
+            self.core.loadSystemConfiguration(
+                mm_config_file
+            )  # mm_config_file is now guaranteed
             print(f"System configuration {mm_config_file} loaded.")
 
             # The following loadDevice/initializeDevice might be redundant if the config
@@ -80,32 +90,39 @@ class Stage:
             # This part needs to be verified against actual MM behavior with ASI stages.
             loaded_devices = self.core.getLoadedDevices()
             if self.stage_device_label not in loaded_devices:
-                 print(f"Device {self.stage_device_label} not pre-loaded by config, attempting explicit load/init.")
-                 self.core.loadDevice(self.stage_device_label, adapter_name, device_name)
-                 self.core.initializeDevice(self.stage_device_label)
-                 print(f"Device {self.stage_device_label} explicitly initialized.")
+                print(
+                    f"Device {self.stage_device_label} not pre-loaded by config, attempting explicit load/init."
+                )
+                self.core.loadDevice(self.stage_device_label, adapter_name, device_name)
+                self.core.initializeDevice(self.stage_device_label)
+                print(f"Device {self.stage_device_label} explicitly initialized.")
             else:
                 # Even if loaded by config, ensure it's initialized if initializeDevice is safe to call multiple times
                 # or if there's a way to check initialization status.
                 # For now, assuming it's okay or config handles it.
-                print(f"Device {self.stage_device_label} found as loaded by config file.")
+                print(
+                    f"Device {self.stage_device_label} found as loaded by config file."
+                )
                 # Optionally, could call initializeDevice here too if it's safe and necessary.
                 # self.core.initializeDevice(self.stage_device_label)
 
-
             device_type = self.core.getDeviceType(self.stage_device_label)
             if device_type not in [DeviceType.XYStage, DeviceType.Stage]:
-                raise RuntimeError(f"Device {self.stage_device_label} is type {device_type}, not XYStage or Stage.")
+                raise RuntimeError(
+                    f"Device {self.stage_device_label} is type {device_type}, not XYStage or Stage."
+                )
 
             self._current_position = self.core.getXPosition(self.stage_device_label)
-            print(f"Stage '{self.stage_device_label}' (HW) initialized. "
-                  f"Initial X position: {self._current_position:.2f} um")
+            print(
+                f"Stage '{self.stage_device_label}' (HW) initialized. "
+                f"Initial X position: {self._current_position:.2f} um"
+            )
 
         except RuntimeError as e:
             print(f"Error initializing HW stage '{self.stage_device_label}': {e}")
             print("Falling back to MOCK hardware mode.")
             self.mock_hw = True
-            self.core = MagicMock() # No spec for fallback mock core
+            self.core = MagicMock()  # No spec for fallback mock core
             self._current_position = 0.0
             self.core.getXPosition.return_value = self._current_position
             self.core.setXPosition.return_value = None
@@ -113,10 +130,12 @@ class Stage:
             self.core.waitForDevice.return_value = None
             self.core.stop.return_value = None
         except Exception as e:
-            print(f"Unexpected error during HW stage '{self.stage_device_label}' initialization: {e}")
+            print(
+                f"Unexpected error during HW stage '{self.stage_device_label}' initialization: {e}"
+            )
             print("Falling back to MOCK hardware mode.")
             self.mock_hw = True
-            self.core = MagicMock() # No spec for fallback mock core
+            self.core = MagicMock()  # No spec for fallback mock core
             self._current_position = 0.0
             self.core.getXPosition.return_value = self._current_position
             self.core.setXPosition.return_value = None
@@ -124,30 +143,12 @@ class Stage:
             self.core.waitForDevice.return_value = None
             self.core.stop.return_value = None
             # Removed dead code block that attempted to use mocked core after fallback
-
-        except RuntimeError as e:
-            print(f"Error initializing HW stage '{self.stage_device_label}': {e}")
-            print("Falling back to MOCK hardware mode.")
-            self.mock_hw = True
-            self.core = MagicMock()
             self._current_position = 0.0
             self.core.getXPosition.return_value = self._current_position
             self.core.setXPosition.return_value = None
             self.core.setRelativeXPosition.return_value = None
             self.core.waitForDevice.return_value = None
             self.core.stop.return_value = None
-        except Exception as e:
-            print(f"Unexpected error during HW stage '{self.stage_device_label}' initialization: {e}")
-            print("Falling back to MOCK hardware mode.")
-            self.mock_hw = True
-            self.core = MagicMock()
-            self._current_position = 0.0
-            self.core.getXPosition.return_value = self._current_position
-            self.core.setXPosition.return_value = None
-            self.core.setRelativeXPosition.return_value = None
-            self.core.waitForDevice.return_value = None
-            self.core.stop.return_value = None
-
 
     def get_position(self) -> float:
         """
@@ -159,22 +160,23 @@ class Stage:
 
         try:
             pos = self.core.getXPosition(self.stage_device_label)
-            self._current_position = pos # Update cache
+            self._current_position = pos  # Update cache
             # print(f"HW: Queried stage position: {self._current_position:.2f} um")
             return pos
-        except RuntimeError as e: # Changed to RuntimeError
+        except RuntimeError as e:  # Changed to RuntimeError
             print(f"Error getting position for {self.stage_device_label}: {e}")
             # Fallback to cached position or handle error as appropriate
             return self._current_position
-
 
     def move_step(self, step_size: float, direction: str) -> None:
         """
         Moves the stage by a defined step in the X direction.
         """
-        if self._is_jogging: # Conceptual check
-            print("Conceptual jog is active. Call stop() before new move_step. For safety, stopping.")
-            self.stop() # Stop any hardware action if stop() is robust
+        if self._is_jogging:  # Conceptual check
+            print(
+                "Conceptual jog is active. Call stop() before new move_step. For safety, stopping."
+            )
+            self.stop()  # Stop any hardware action if stop() is robust
 
         if direction not in ["forward", "backward"]:
             print(f"Invalid direction: {direction}. Must be 'forward' or 'backward'.")
@@ -190,26 +192,33 @@ class Stage:
                 self._current_position += step_size
             elif direction == "backward":
                 self._current_position -= step_size
-            print(f"MOCK: Move step complete. New position: {self._current_position:.2f} um")
+            print(
+                f"MOCK: Move step complete. New position: {self._current_position:.2f} um"
+            )
             return
 
         try:
             current_x = self.core.getXPosition(self.stage_device_label)
             target_x = current_x + (step_size if direction == "forward" else -step_size)
 
-            print(f"HW: Moving {self.stage_device_label} {direction} from {current_x:.2f} by {step_size} to {target_x:.2f} um...")
-            self.core.setXPosition(self.stage_device_label, target_x)
-            self.core.waitForDevice(self.stage_device_label) # Wait for move to complete
+            print(
+                f"HW: Moving {self.stage_device_label} {direction} from {current_x:.2f} by {step_size} to {target_x:.2f} um..."
+            )
+            # For XYStage, use setXYPosition; here we only move X, so keep Y unchanged
+            current_y = self.core.getYPosition(self.stage_device_label)
+            self.core.setXYPosition(self.stage_device_label, target_x, current_y)
+            self.core.waitForDevice(
+                self.stage_device_label
+            )  # Wait for move to complete
             self._current_position = self.core.getXPosition(self.stage_device_label)
             print(f"HW: Move complete. New position: {self._current_position:.2f} um")
-        except RuntimeError as e: # Changed to RuntimeError
+        except RuntimeError as e:  # Changed to RuntimeError
             print(f"Error during move_step for {self.stage_device_label}: {e}")
             # Update position cache even if error during move, to reflect last known state
             try:
                 self._current_position = self.core.getXPosition(self.stage_device_label)
-            except RuntimeError: # Changed to RuntimeError
-                pass # If getting position also fails, keep last good cache
-
+            except RuntimeError:  # Changed to RuntimeError
+                pass  # If getting position also fails, keep last good cache
 
     def jog(self, speed: float, direction: str) -> None:
         """
@@ -218,7 +227,9 @@ class Stage:
         A true continuous jog would require repeated calls or hardware support.
         """
         if direction not in ["forward", "backward"]:
-            print(f"Invalid jog direction: {direction}. Must be 'forward' or 'backward'.")
+            print(
+                f"Invalid jog direction: {direction}. Must be 'forward' or 'backward'."
+            )
             return
 
         if speed <= 0:
@@ -231,64 +242,79 @@ class Stage:
         # Here, we define one jog call makes a step of 'speed * 0.05' (e.g. 0.5um if speed is 10).
         # This scaling factor (0.05) is arbitrary and defines sensitivity.
         relative_step_size = speed * 0.05
-        actual_move = relative_step_size if direction == "forward" else -relative_step_size
+        actual_move = (
+            relative_step_size if direction == "forward" else -relative_step_size
+        )
 
-        self._is_jogging = True # Conceptual: a jog command has been issued
+        self._is_jogging = True  # Conceptual: a jog command has been issued
         self._jog_speed = speed
         self._jog_direction = direction
 
         if self.mock_hw or not self.core:
-            print(f"MOCK: Jogging {direction} with effective step {actual_move:.2f} um (speed: {speed})...")
+            print(
+                f"MOCK: Jogging {direction} with effective step {actual_move:.2f} um (speed: {speed})..."
+            )
             self._current_position += actual_move
-            print(f"MOCK: Jog move complete. New position: {self._current_position:.2f} um")
+            print(
+                f"MOCK: Jog move complete. New position: {self._current_position:.2f} um"
+            )
             # In mock, stop simply clears the flag.
             # self._is_jogging = False
             return
 
         try:
-            print(f"HW: Jogging {self.stage_device_label} {direction} with relative step {actual_move:.2f} um (speed: {speed})...")
-            self.core.setRelativeXPosition(self.stage_device_label, actual_move)
+            print(
+                f"HW: Jogging {self.stage_device_label} {direction} with relative step {actual_move:.2f} um (speed: {speed})..."
+            )
+            # Only move X, keep Y unchanged
+            current_y = self.core.getYPosition(self.stage_device_label)
+            self.core.setRelativeXYPosition(self.stage_device_label, actual_move, 0)
             self.core.waitForDevice(self.stage_device_label)
             self._current_position = self.core.getXPosition(self.stage_device_label)
-            print(f"HW: Jog move complete. New position: {self._current_position:.2f} um")
-        except RuntimeError as e: # Changed to RuntimeError
+            print(
+                f"HW: Jog move complete. New position: {self._current_position:.2f} um"
+            )
+        except RuntimeError as e:  # Changed to RuntimeError
             print(f"Error during jog for {self.stage_device_label}: {e}")
-            self._is_jogging = False # Ensure jogging state is reset on error
-            try: # Try to update position cache
+            self._is_jogging = False  # Ensure jogging state is reset on error
+            try:  # Try to update position cache
                 self._current_position = self.core.getXPosition(self.stage_device_label)
-            except RuntimeError: # Changed to RuntimeError
+            except RuntimeError:  # Changed to RuntimeError
                 pass
         # finally:
-            # If jog is one-shot, then _is_jogging should be reset here.
-            # However, the widget might rapidly call jog; stop() is the explicit way to clear it.
-            # self._is_jogging = False
-
+        # If jog is one-shot, then _is_jogging should be reset here.
+        # However, the widget might rapidly call jog; stop() is the explicit way to clear it.
+        # self._is_jogging = False
 
     def stop(self) -> None:
         """
         Stops any ongoing stage movement for the specified device.
         Also clears the conceptual 'jogging' state.
         """
-        print(f"Attempting to stop stage: {self.stage_device_label if not self.mock_hw else 'MOCK'}")
-        self._is_jogging = False # Clear conceptual jog state immediately
+        print(
+            f"Attempting to stop stage: {self.stage_device_label if not self.mock_hw else 'MOCK'}"
+        )
+        self._is_jogging = False  # Clear conceptual jog state immediately
 
         if self.mock_hw or not self.core:
             print("MOCK: Stage stopped.")
             return
 
         try:
-            self.core.stop(self.stage_device_label) # General stop command for the device
+            self.core.stop(
+                self.stage_device_label
+            )  # General stop command for the device
             print(f"HW: Stop command sent to {self.stage_device_label}.")
             # Update position after stop
             self._current_position = self.core.getXPosition(self.stage_device_label)
             print(f"HW: Position after stop: {self._current_position:.2f} um")
-        except RuntimeError as e: # Changed to RuntimeError
+        except RuntimeError as e:  # Changed to RuntimeError
             print(f"Error stopping stage {self.stage_device_label}: {e}")
             # Even if stop fails, try to get current position
             try:
                 self._current_position = self.core.getXPosition(self.stage_device_label)
-            except RuntimeError: # Changed to RuntimeError
-                 pass # Keep last good cache
+            except RuntimeError:  # Changed to RuntimeError
+                pass  # Keep last good cache
 
 
 if __name__ == "__main__":
@@ -313,7 +339,7 @@ if __name__ == "__main__":
     # For this example, we will default to mock_hw=True as no config is provided.
     # If you have a MM setup, provide your .cfg file and device label.
     print("Initializing Stage in MOCK mode for this example...")
-    stage = Stage(mock_hw=True, stage_device_label="TestXYStage") # Using mock_hw=True
+    stage = Stage(mock_hw=True, stage_device_label="TestXYStage")  # Using mock_hw=True
 
     print(f"Initial position: {stage.get_position():.2f} um")
 
@@ -323,20 +349,22 @@ if __name__ == "__main__":
     stage.move_step(2.0, "backward")
     print(f"Position after step backward: {stage.get_position():.2f} um")
 
-    stage.move_step(-1.0, "forward") # Test invalid step (prints error, no move)
-    stage.move_step(1.0, "somewhere") # Test invalid direction (prints error, no move)
+    stage.move_step(-1.0, "forward")  # Test invalid step (prints error, no move)
+    stage.move_step(1.0, "somewhere")  # Test invalid direction (prints error, no move)
 
     print("\n--- Jogging Test (conceptual) ---")
-    stage.jog(20.0, "forward") # speed = 20um/s, actual_step = 20 * 0.05 = 1.0 um
+    stage.jog(20.0, "forward")  # speed = 20um/s, actual_step = 20 * 0.05 = 1.0 um
     print(f"Position after one jog forward: {stage.get_position():.2f} um")
     # Simulate multiple jog calls by the widget
     stage.jog(20.0, "forward")
     print(f"Position after second jog forward: {stage.get_position():.2f} um")
 
-    stage.stop() # Clears _is_jogging flag
-    print(f"Position after stopping: {stage.get_position():.2f} um. Jogging active: {stage._is_jogging}")
+    stage.stop()  # Clears _is_jogging flag
+    print(
+        f"Position after stopping: {stage.get_position():.2f} um. Jogging active: {stage._is_jogging}"
+    )
 
-    stage.jog(10.0, "backward") # speed = 10um/s, actual_step = 10 * 0.05 = 0.5 um
+    stage.jog(10.0, "backward")  # speed = 10um/s, actual_step = 10 * 0.05 = 0.5 um
     print(f"Position after one jog backward: {stage.get_position():.2f} um")
     stage.stop()
 
@@ -347,15 +375,17 @@ if __name__ == "__main__":
     # print(f"Jogging {stage._jog_direction} at {stage._jog_speed}, Active: {stage._is_jogging}")
     # stage.stop()
 
-    stage.stop() # Test stopping when not conceptually jogging
+    stage.stop()  # Test stopping when not conceptually jogging
 
     print("\n--- Invalid Jog Parameters ---")
-    stage.jog(-5.0, "forward") # speed must be positive
-    stage.jog(5.0, "somewhere") # invalid direction
+    stage.jog(-5.0, "forward")  # speed must be positive
+    stage.jog(5.0, "somewhere")  # invalid direction
 
     print("\n--- Stepping while Jogging (conceptual) ---")
-    stage.jog(1.0, "forward") # Conceptual jog starts
+    stage.jog(1.0, "forward")  # Conceptual jog starts
     print(f"Position: {stage.get_position():.2f}, Jogging: {stage._is_jogging}")
-    stage.move_step(1.0, "forward") # This will call stage.stop() first
-    print(f"Position: {stage.get_position():.2f}, Jogging: {stage._is_jogging} (should be False)")
-    stage.stop() # Ensure fully stopped
+    stage.move_step(1.0, "forward")  # This will call stage.stop() first
+    print(
+        f"Position: {stage.get_position():.2f}, Jogging: {stage._is_jogging} (should be False)"
+    )
+    stage.stop()  # Ensure fully stopped
