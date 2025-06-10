@@ -435,13 +435,20 @@ class AcquisitionGUI:
         self.hw_interface = hw_interface
         self.root.title("ASI SPIM Acquisition Control")
 
-        # Global variables to track user input
+        # --- Global variables to track user input ---
         self.num_slices_var = tk.IntVar(value=NUM_SLICES_SETTING)
         self.step_size_var = tk.DoubleVar(value=STEP_SIZE_UM)
         self.laser_duration_var = tk.DoubleVar(value=LASER_TRIG_DURATION_MS)
         self.delay_before_camera_var = tk.DoubleVar(value=DELAY_BEFORE_CAMERA_MS)
 
-        # Layout
+        # --- Derived variables for display ---
+        self.camera_exposure_var = tk.StringVar()
+        self.delay_before_laser_var = tk.StringVar()
+
+        # Initialize derived values
+        self.update_derived_values()
+
+        # --- Layout ---
         self.create_widgets()
         self.redirect_output()
 
@@ -449,31 +456,44 @@ class AcquisitionGUI:
         frame = tk.Frame(self.root)
         frame.pack(padx=10, pady=10)
 
-        tk.Label(frame, text="NUM_SLICES_SETTING").grid(row=0, column=0, sticky="w")
+        # Input Fields
+        tk.Label(frame, text="NUM_SLICES_SETTING").grid(row=0, column=0, sticky='w')
         tk.Entry(frame, textvariable=self.num_slices_var).grid(row=0, column=1)
 
-        tk.Label(frame, text="STEP_SIZE_UM").grid(row=1, column=0, sticky="w")
+        tk.Label(frame, text="STEP_SIZE_UM").grid(row=1, column=0, sticky='w')
         tk.Entry(frame, textvariable=self.step_size_var).grid(row=1, column=1)
 
-        tk.Label(frame, text="LASER_TRIG_DURATION_MS").grid(row=2, column=0, sticky="w")
+        tk.Label(frame, text="LASER_TRIG_DURATION_MS").grid(row=2, column=0, sticky='w')
         tk.Entry(frame, textvariable=self.laser_duration_var).grid(row=2, column=1)
 
-        tk.Label(frame, text="DELAY_BEFORE_CAMERA_MS").grid(row=3, column=0, sticky="w")
+        tk.Label(frame, text="DELAY_BEFORE_CAMERA_MS").grid(row=3, column=0, sticky='w')
         tk.Entry(frame, textvariable=self.delay_before_camera_var).grid(row=3, column=1)
 
+        # Derived Value Displays
+        tk.Label(frame, text="CAMERA_EXPOSURE_MS (auto)").grid(row=4, column=0, sticky='w')
+        tk.Label(frame, textvariable=self.camera_exposure_var, fg="blue").grid(row=4, column=1)
+
+        tk.Label(frame, text="DELAY_BEFORE_LASER_MS (auto)").grid(row=5, column=0, sticky='w')
+        tk.Label(frame, textvariable=self.delay_before_laser_var, fg="blue").grid(row=5, column=1)
+
+        # Buttons
         tk.Button(frame, text="Run Acquisition", command=self.run_acquisition).grid(
-            row=4, column=0, pady=5
+            row=6, column=0, pady=5
         )
         tk.Button(frame, text="Retrigger", command=self.run_acquisition).grid(
-            row=4, column=1, pady=5
+            row=6, column=1, pady=5
         )
         tk.Button(frame, text="Exit", command=self.root.quit).grid(
-            row=4, column=2, pady=5
+            row=6, column=2, pady=5
         )
 
-        # Output console
+        # Console Output
         self.console = scrolledtext.ScrolledText(frame, height=15, width=60)
-        self.console.grid(row=5, column=0, columnspan=3, pady=10)
+        self.console.grid(row=7, column=0, columnspan=3, pady=10)
+
+        # Bind variable changes to update derived values
+        self.laser_duration_var.trace_add("write", self.on_input_change)
+        self.delay_before_camera_var.trace_add("write", self.on_input_change)
 
     def redirect_output(self):
         import sys
@@ -491,22 +511,33 @@ class AcquisitionGUI:
         sys.stdout = RedirectOutput(self.console)
         sys.stderr = RedirectOutput(self.console)
 
+    def on_input_change(self, *args):
+        """Called when any tracked input value changes."""
+        global LASER_TRIG_DURATION_MS, DELAY_BEFORE_CAMERA_MS
+        try:
+            LASER_TRIG_DURATION_MS = self.laser_duration_var.get()
+            DELAY_BEFORE_CAMERA_MS = self.delay_before_camera_var.get()
+        except tk.TclError:
+            return  # Skip if invalid input
+        self.update_derived_values()
+
+    def update_derived_values(self):
+        """Recalculate derived values and update labels."""
+        global CAMERA_EXPOSURE_MS, DELAY_BEFORE_LASER_MS
+        CAMERA_EXPOSURE_MS = LASER_TRIG_DURATION_MS + 1.95
+        DELAY_BEFORE_LASER_MS = DELAY_BEFORE_CAMERA_MS + 1.25
+        self.camera_exposure_var.set(f"{CAMERA_EXPOSURE_MS:.2f}")
+        self.delay_before_laser_var.set(f"{DELAY_BEFORE_LASER_MS:.2f}")
+
     def run_acquisition(self):
-        global \
-            NUM_SLICES_SETTING, \
-            STEP_SIZE_UM, \
-            LASER_TRIG_DURATION_MS, \
-            DELAY_BEFORE_CAMERA_MS, \
-            CAMERA_EXPOSURE_MS, \
-            DELAY_BEFORE_LASER_MS
+        global NUM_SLICES_SETTING, STEP_SIZE_UM, LASER_TRIG_DURATION_MS, DELAY_BEFORE_CAMERA_MS
 
         try:
             NUM_SLICES_SETTING = self.num_slices_var.get()
             STEP_SIZE_UM = self.step_size_var.get()
             LASER_TRIG_DURATION_MS = self.laser_duration_var.get()
             DELAY_BEFORE_CAMERA_MS = self.delay_before_camera_var.get()
-            DELAY_BEFORE_LASER_MS = DELAY_BEFORE_CAMERA_MS + 1.25
-            CAMERA_EXPOSURE_MS = LASER_TRIG_DURATION_MS + 1.95
+            self.update_derived_values()  # Ensure derived values are up-to-date
 
             print("\nRunning acquisition with settings:")
             print(f"  NUM_SLICES_SETTING = {NUM_SLICES_SETTING}")
@@ -516,14 +547,10 @@ class AcquisitionGUI:
             print(f"  DELAY_BEFORE_LASER_MS = {DELAY_BEFORE_LASER_MS}")
             print(f"  CAMERA_EXPOSURE_MS = {CAMERA_EXPOSURE_MS}")
 
-            # Run in separate thread to avoid freezing GUI
-            threading.Thread(
-                target=run_acquisition_sequence, args=(self.hw_interface,), daemon=True
-            ).start()
+            threading.Thread(target=run_acquisition_sequence, args=(self.hw_interface,), daemon=True).start()
 
         except Exception as e:
             print(f"Error updating parameters: {e}")
-
 
 def start_gui():
     try:
