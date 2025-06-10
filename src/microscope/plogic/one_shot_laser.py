@@ -451,13 +451,10 @@ class AcquisitionGUI:
             self.total_time_display_var.set(total_time_str)
 
         except (tk.TclError, ValueError):
-            # Handles cases where an entry is empty or contains invalid text
             return
 
     def _calculate_minimal_interval(self) -> float:
         """Estimate the minimum time to acquire one volume."""
-        # A simple estimation based on camera exposure + a small overhead
-        # for readout and galvo movement. A 10% overhead is a reasonable guess.
         overhead_factor = 1.10
         total_exposure_ms = self.settings.num_slices * self.settings.camera_exposure_ms
         estimated_ms = total_exposure_ms * overhead_factor
@@ -473,8 +470,6 @@ class AcquisitionGUI:
             time_per_volume_s = max(user_interval_s, min_interval_s)
 
         total_seconds = time_per_volume_s * num_time_points
-
-        # Format into HH:MM:SS
         h = int(total_seconds // 3600)
         m = int((total_seconds % 3600) // 60)
         s = int(total_seconds % 60)
@@ -565,7 +560,6 @@ class AcquisitionGUI:
         if self.current_time_point >= self.time_points_total:
             self._finish_time_series()
         else:
-            min_interval_s = self._calculate_minimal_interval()
             if self.minimal_interval_var.get():
                 delay_s = 0
             else:
@@ -592,6 +586,11 @@ class AcquisitionGUI:
 
     def display_image(self, img_array: np.ndarray):
         try:
+            container = self.image_panel.master
+            container_w = container.winfo_width()
+            container_h = container.winfo_height()
+            if container_w < 2 or container_h < 2:
+                return
             img_min, img_max = np.min(img_array), np.max(img_array)
             if img_min == img_max:
                 img_normalized = np.zeros_like(img_array, dtype=np.uint8)
@@ -601,10 +600,7 @@ class AcquisitionGUI:
                 ).astype(np.uint8)
             pil_img = Image.fromarray(img_normalized)
             pil_img.thumbnail(
-                (
-                    self.image_panel.winfo_width(),
-                    self.image_panel.winfo_height(),
-                ),
+                (container_w, container_h),
                 Image.Resampling.LANCZOS,
             )
             tk_img = ImageTk.PhotoImage(pil_img)
