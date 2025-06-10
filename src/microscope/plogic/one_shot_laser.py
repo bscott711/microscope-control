@@ -269,7 +269,7 @@ class AcquisitionGUI:
         self.root = root
         self.hw_interface = hw_interface
         self.settings = AcquisitionSettings()
-        self.root.title("ASI SPIM Acquisition Control")
+        self.root.title("ASI OPM Acquisition Control")
 
         # GUI Variables
         self.num_slices_var = tk.IntVar(value=self.settings.num_slices)
