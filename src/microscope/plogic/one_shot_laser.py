@@ -293,6 +293,7 @@ class AcquisitionGUI:
 
         # Acquisition State
         self.acquisition_in_progress = False
+        self.cancel_requested = False
         self.time_points_total = 0
         self.current_time_point = 0
         self.images_expected_per_volume = 0
@@ -408,6 +409,11 @@ class AcquisitionGUI:
             bottom_bar, text="Run Time Series", command=self.start_time_series
         )
         self.run_button.grid(row=0, column=0, padx=5)
+        self.cancel_button = ttk.Button(
+            bottom_bar, text="Cancel", command=self._request_cancel
+        )
+        self.cancel_button.grid(row=0, column=0, padx=5)
+        self.cancel_button.grid_remove()
         ttk.Label(bottom_bar, textvariable=self.status_var, anchor="w").grid(
             row=0, column=1, sticky="ew", padx=5
         )
@@ -463,11 +469,21 @@ class AcquisitionGUI:
         s = int(total_seconds % 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
 
+    def _request_cancel(self):
+        """Flags that the user has requested to cancel the acquisition."""
+        print("--- Cancel Requested by User ---")
+        self.status_var.set("Cancelling...")
+        self.cancel_requested = True
+        self.cancel_button.configure(state="disabled")
+
     def start_time_series(self):
         if self.acquisition_in_progress:
             return
         self.acquisition_in_progress = True
-        self.run_button.configure(state="disabled")
+        self.cancel_requested = False
+        self.run_button.grid_remove()
+        self.cancel_button.grid()
+        self.cancel_button.configure(state="normal")
         self.status_var.set("Initializing...")
         try:
             self.pixel_size_um = mmc.getPixelSizeUm()
@@ -518,6 +534,9 @@ class AcquisitionGUI:
             self._finish_time_series()
 
     def _poll_for_images(self):
+        if self.cancel_requested:
+            self._finish_time_series(cancelled=True)
+            return
         if not self.acquisition_in_progress:
             return
         if mmc.getRemainingImageCount() > 0:
@@ -601,15 +620,19 @@ class AcquisitionGUI:
             print(f"Waiting {delay_s:.2f} seconds before next volume.")
             self.root.after(int(delay_s * 1000), self._start_next_volume)
 
-    def _finish_time_series(self):
-        print("\n--- Time Series Complete ---")
+    def _finish_time_series(self, cancelled: bool = False):
+        if cancelled:
+            print("\n--- Acquisition Cancelled by User ---")
+        else:
+            print("\n--- Time Series Complete ---")
         final_cleanup(self.settings)
         self.hw_interface.find_and_set_trigger_mode(
             self.hw_interface.camera1, ["Internal", "Internal Trigger"]
         )
         self.acquisition_in_progress = False
-        self.run_button.configure(state="normal")
-        self.status_var.set("Ready")
+        self.run_button.grid()
+        self.cancel_button.grid_remove()
+        self.status_var.set("Ready" if not cancelled else "Cancelled")
 
     def _process_tagged_image(self, tagged_img) -> np.ndarray:
         height = int(tagged_img.tags.get("Height", 0))
