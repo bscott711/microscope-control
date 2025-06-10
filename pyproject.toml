@@ -1,38 +1,66 @@
-[project]
-name = "microscope-control"
-version = "0.1.0"
-dependencies = [
-  "pymmcore-plus[cli,io]>=0.1",
-  "useq-schema>=0.7",
-  "napari[pyqt6]>=0.6",
-  "magicgui>=0.5",
-  "numpy>=1.23",
-  "inputs>=0.5",
-]
-requires-python = ">=3.10"
-authors = [
-  { name = "Brandon Scott", email = "brandon.scott@sdsmt.edu" }
-]
-description = "OPM Microscope Control System"
-readme = "README.md"
-license = "MIT"
-
-[project.optional-dependencies]
-dev = [
-    "pytest",
-    "sphinx",
-    "black",
-    "isort",
-    "mypy",
-    "ruff>=0.11",
-]
-
-[project.urls]
-Homepage = "https://github.com/bscott711/microscope-control"
+# pyproject.toml
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[project.entry-points."napari.manifest"]
-# "microscope-control" = "microscope_control"
+[project]
+name = "microscope_control"
+version = "0.1.0-refactor"
+authors = [
+  { name="Brandon Scott", email="brandon.scott@sdsmt.edu" },
+]
+description = "A modular desktop application for controlling an ASI Tiger-based OPM."
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+# Runtime dependencies required to run the application
+dependencies = [
+    "pyside6",
+    "pymmcore-plus[cli,io]",
+    "numpy",
+    "tifffile",
+    "pillow",
+]
+
+[project.optional-dependencies]
+# Development dependencies, installed with `uv pip install -e .[dev]`
+dev = [
+    "ruff",
+]
+
+[project.urls]
+Homepage = "https://github.com/bscott711/microscope-control"
+
+[project.scripts]
+# This will allow running the app from the command line after installation
+microscope-control = "microscope_control.__main__:main"
+
+
+# --- Tool Configuration ---
+
+[tool.ruff]
+# Set the minimum Python version to target for linting.
+target-version = "py39"
+
+[tool.ruff.lint]
+# Rules: https://docs.astral.sh/ruff/rules/
+# Select a base set of rules and add others as needed.
+# "F" - Pyflakes
+# "E" - pycodestyle Error
+# "W" - pycodestyle Warning
+# "I" - isort
+# "UP" - pyupgrade
+select = ["E", "F", "W", "I", "UP"]
+ignore = []
+
+[tool.ruff.format]
+# Use double quotes for strings where possible.
+quote-style = "double"
+# Like Black, use trailing commas for multi-line expressions.
+
