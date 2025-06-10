@@ -3,6 +3,9 @@ from typing import Optional, List
 import traceback
 import time
 import os
+import tkinter as tk
+from tkinter import scrolledtext
+import threading
 
 # --- Acquisition Settings ---
 NUM_SLICES_SETTING = 3
@@ -56,7 +59,7 @@ SHEET_OFFSET_DEG = 0.0
 DELAY_BEFORE_SIDE_MS = 0.0
 DELAY_BEFORE_CAMERA_MS = 1.25  # 18
 DELAY_BEFORE_LASER_MS = DELAY_BEFORE_CAMERA_MS + 1.25
-CAMERA_EXPOSURE_MS = LASER_TRIG_DURATION_MS + 2.00  # 1.95
+CAMERA_EXPOSURE_MS = LASER_TRIG_DURATION_MS + 1.95
 
 # Camera mode settings
 CAMERA_MODE_IS_OVERLAP = False  # True for overlap mode, False for non-overlap
@@ -426,34 +429,113 @@ def run_acquisition_sequence(hw_interface: HardwareInterface):
         )
 
 
-if __name__ == "__main__":
-    print("Starting One-Shot Laser Acquisition Script...")
+class AcquisitionGUI:
+    def __init__(self, root, hw_interface):
+        self.root = root
+        self.hw_interface = hw_interface
+        self.root.title("ASI SPIM Acquisition Control")
 
+        # Global variables to track user input
+        self.num_slices_var = tk.IntVar(value=NUM_SLICES_SETTING)
+        self.step_size_var = tk.DoubleVar(value=STEP_SIZE_UM)
+        self.laser_duration_var = tk.DoubleVar(value=LASER_TRIG_DURATION_MS)
+        self.delay_before_camera_var = tk.DoubleVar(value=DELAY_BEFORE_CAMERA_MS)
+
+        # Layout
+        self.create_widgets()
+        self.redirect_output()
+
+    def create_widgets(self):
+        frame = tk.Frame(self.root)
+        frame.pack(padx=10, pady=10)
+
+        tk.Label(frame, text="NUM_SLICES_SETTING").grid(row=0, column=0, sticky="w")
+        tk.Entry(frame, textvariable=self.num_slices_var).grid(row=0, column=1)
+
+        tk.Label(frame, text="STEP_SIZE_UM").grid(row=1, column=0, sticky="w")
+        tk.Entry(frame, textvariable=self.step_size_var).grid(row=1, column=1)
+
+        tk.Label(frame, text="LASER_TRIG_DURATION_MS").grid(row=2, column=0, sticky="w")
+        tk.Entry(frame, textvariable=self.laser_duration_var).grid(row=2, column=1)
+
+        tk.Label(frame, text="DELAY_BEFORE_CAMERA_MS").grid(row=3, column=0, sticky="w")
+        tk.Entry(frame, textvariable=self.delay_before_camera_var).grid(row=3, column=1)
+
+        tk.Button(frame, text="Run Acquisition", command=self.run_acquisition).grid(
+            row=4, column=0, pady=5
+        )
+        tk.Button(frame, text="Retrigger", command=self.run_acquisition).grid(
+            row=4, column=1, pady=5
+        )
+        tk.Button(frame, text="Exit", command=self.root.quit).grid(
+            row=4, column=2, pady=5
+        )
+
+        # Output console
+        self.console = scrolledtext.ScrolledText(frame, height=15, width=60)
+        self.console.grid(row=5, column=0, columnspan=3, pady=10)
+
+    def redirect_output(self):
+        import sys
+        from io import StringIO
+
+        class RedirectOutput(StringIO):
+            def __init__(self, widget):
+                super().__init__()
+                self.widget = widget
+
+            def write(self, string): # type: ignore
+                self.widget.insert(tk.END, string)
+                self.widget.see(tk.END)
+
+        sys.stdout = RedirectOutput(self.console)
+        sys.stderr = RedirectOutput(self.console)
+
+    def run_acquisition(self):
+        global \
+            NUM_SLICES_SETTING, \
+            STEP_SIZE_UM, \
+            LASER_TRIG_DURATION_MS, \
+            DELAY_BEFORE_CAMERA_MS, \
+            CAMERA_EXPOSURE_MS, \
+            DELAY_BEFORE_LASER_MS
+
+        try:
+            NUM_SLICES_SETTING = self.num_slices_var.get()
+            STEP_SIZE_UM = self.step_size_var.get()
+            LASER_TRIG_DURATION_MS = self.laser_duration_var.get()
+            DELAY_BEFORE_CAMERA_MS = self.delay_before_camera_var.get()
+            DELAY_BEFORE_LASER_MS = DELAY_BEFORE_CAMERA_MS + 1.25
+            CAMERA_EXPOSURE_MS = LASER_TRIG_DURATION_MS + 1.95
+
+            print("\nRunning acquisition with settings:")
+            print(f"  NUM_SLICES_SETTING = {NUM_SLICES_SETTING}")
+            print(f"  STEP_SIZE_UM = {STEP_SIZE_UM}")
+            print(f"  LASER_TRIG_DURATION_MS = {LASER_TRIG_DURATION_MS}")
+            print(f"  DELAY_BEFORE_CAMERA_MS = {DELAY_BEFORE_CAMERA_MS}")
+            print(f"  DELAY_BEFORE_LASER_MS = {DELAY_BEFORE_LASER_MS}")
+            print(f"  CAMERA_EXPOSURE_MS = {CAMERA_EXPOSURE_MS}")
+
+            # Run in separate thread to avoid freezing GUI
+            threading.Thread(
+                target=run_acquisition_sequence, args=(self.hw_interface,), daemon=True
+            ).start()
+
+        except Exception as e:
+            print(f"Error updating parameters: {e}")
+
+
+def start_gui():
     try:
         hw_main_interface = HardwareInterface(config_file_path=CFG_PATH)
-    except Exception as e_init:
-        print(f"Failed to initialize hardware: {e_init}")
-        traceback.print_exc()
-        exit(1)
+    except Exception as e:
+        print(f"Hardware initialization failed: {e}")
+        return
 
-    run_count = 1
-    print("\n--- Starting First Acquisition Automatically ---")
-    run_acquisition_sequence(hw_main_interface)
-    print(f"--- Run #{run_count} Complete ---")
-    run_count += 1
+    root = tk.Tk()
+    app = AcquisitionGUI(root, hw_main_interface)  # noqa: F841
+    root.mainloop()
 
-    while True:
-        print("\n--- Ready for Next Acquisition ---")
-        print("Press 'r' to retrigger, or Enter to exit.")
-        user_input = input().strip().lower()
 
-        if user_input == "r":
-            print(f"\n--- Running Acquisition (Run #{run_count}) ---")
-            run_acquisition_sequence(hw_main_interface)
-            print(f"--- Run #{run_count} Complete ---")
-            run_count += 1
-        elif user_input == "":
-            print("\nShutting down script. Goodbye!")
-            break
-        else:
-            print("Invalid input. Please press 'r' to retrigger or Enter to exit.")
+if __name__ == "__main__":
+    start_gui()
