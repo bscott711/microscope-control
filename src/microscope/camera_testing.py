@@ -1,5 +1,5 @@
 from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
-from typing import Optional, Dict, Tuple, Any
+from typing import Optional, Dict, Any
 import traceback
 import time  # Added for time.sleep in set_crisp_state and movement tests
 import os  # For path joining if needed
