@@ -3,10 +3,12 @@ import time
 import traceback
 import tkinter as tk
 from dataclasses import dataclass
-from tkinter import ttk
+from datetime import datetime
+from tkinter import filedialog, ttk
 from typing import List, Optional
 
 import numpy as np
+import tifffile
 from PIL import Image, ImageTk
 from pymmcore_plus import CMMCorePlus
 
@@ -275,16 +277,15 @@ class AcquisitionGUI:
         self.laser_duration_var = tk.DoubleVar(
             value=self.settings.laser_trig_duration_ms
         )
-        self.delay_before_camera_var = tk.DoubleVar(
-            value=self.settings.delay_before_camera_ms
-        )
         self.num_time_points_var = tk.IntVar(value=1)
         self.time_interval_s_var = tk.DoubleVar(value=10.0)
         self.minimal_interval_var = tk.BooleanVar(value=False)
+        self.should_save_var = tk.BooleanVar(value=False)
+        self.save_dir_var = tk.StringVar()
+        self.save_prefix_var = tk.StringVar(value="acquisition")
 
         # Display Variables
         self.camera_exposure_var = tk.StringVar()
-        self.delay_before_laser_var = tk.StringVar()
         self.min_interval_display_var = tk.StringVar()
         self.total_time_display_var = tk.StringVar()
         self.status_var = tk.StringVar(value="Ready")
@@ -297,6 +298,8 @@ class AcquisitionGUI:
         self.images_expected_per_volume = 0
         self.images_popped_this_volume = 0
         self.volume_start_time = 0.0
+        self.current_volume_images = []
+        self.pixel_size_um = 1.0  # Default, will be updated
 
         self.create_widgets()
         self._bind_traces()
@@ -306,9 +309,8 @@ class AcquisitionGUI:
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill="both", expand=True)
         main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_rowconfigure(2, weight=1)
+        main_frame.grid_rowconfigure(3, weight=1)
 
-        # --- Top Controls ---
         top_controls = ttk.Frame(main_frame)
         top_controls.grid(row=0, column=0, sticky="ew")
         top_controls.grid_columnconfigure(0, weight=1)
@@ -342,28 +344,33 @@ class AcquisitionGUI:
         ttk.Entry(vol_frame, textvariable=self.num_slices_var).grid(
             row=0, column=1, sticky="ew", padx=5
         )
-        ttk.Label(vol_frame, text="Step Size (µm)").grid(
+        ttk.Label(vol_frame, text="Laser Duration (ms)").grid(
             row=1, column=0, sticky="w", padx=5
         )
-        ttk.Entry(vol_frame, textvariable=self.step_size_var).grid(
+        ttk.Entry(vol_frame, textvariable=self.laser_duration_var).grid(
             row=1, column=1, sticky="ew", padx=5
         )
-        ttk.Label(vol_frame, text="Laser Duration (ms)").grid(
-            row=2, column=0, sticky="w", padx=5
+
+        save_frame = ttk.Labelframe(main_frame, text="Data Saving")
+        save_frame.grid(row=1, column=0, sticky="ew", pady=5)
+        save_frame.grid_columnconfigure(1, weight=1)
+        ttk.Checkbutton(
+            save_frame, text="Save to disk", variable=self.should_save_var
+        ).grid(row=0, column=0, padx=5)
+        dir_entry = ttk.Entry(
+            save_frame, textvariable=self.save_dir_var, state="readonly"
         )
-        ttk.Entry(vol_frame, textvariable=self.laser_duration_var).grid(
-            row=2, column=1, sticky="ew", padx=5
-        )
-        ttk.Label(vol_frame, text="Delay Before Camera (ms)").grid(
-            row=3, column=0, sticky="w", padx=5
-        )
-        ttk.Entry(vol_frame, textvariable=self.delay_before_camera_var).grid(
-            row=3, column=1, sticky="ew", padx=5
+        dir_entry.grid(row=0, column=1, sticky="ew", padx=5)
+        ttk.Button(
+            save_frame, text="Browse...", command=self._browse_save_directory
+        ).grid(row=0, column=2, padx=5)
+        ttk.Label(save_frame, text="File Prefix:").grid(row=0, column=3, padx=5)
+        ttk.Entry(save_frame, textvariable=self.save_prefix_var).grid(
+            row=0, column=4, sticky="ew", padx=5
         )
 
-        # --- Estimates ---
         est_frame = ttk.Labelframe(main_frame, text="Estimates")
-        est_frame.grid(row=1, column=0, sticky="ew", pady=5)
+        est_frame.grid(row=2, column=0, sticky="ew", pady=5)
         est_frame.grid_columnconfigure(1, weight=1)
         est_frame.grid_columnconfigure(3, weight=1)
         ttk.Label(est_frame, text="Camera Exposure:").grid(
@@ -371,12 +378,6 @@ class AcquisitionGUI:
         )
         ttk.Label(est_frame, textvariable=self.camera_exposure_var).grid(
             row=0, column=1, sticky="w", padx=5
-        )
-        ttk.Label(est_frame, text="Delay Before Laser:").grid(
-            row=1, column=0, sticky="w", padx=5
-        )
-        ttk.Label(est_frame, textvariable=self.delay_before_laser_var).grid(
-            row=1, column=1, sticky="w", padx=5
         )
         ttk.Label(est_frame, text="Min. Interval/Volume:").grid(
             row=0, column=2, sticky="w", padx=5
@@ -391,9 +392,8 @@ class AcquisitionGUI:
             row=1, column=3, sticky="w", padx=5
         )
 
-        # --- Image Display ---
         display_frame = ttk.Frame(main_frame)
-        display_frame.grid(row=2, column=0, sticky="nsew", pady=5)
+        display_frame.grid(row=3, column=0, sticky="nsew", pady=5)
         display_frame.grid_columnconfigure(0, weight=1)
         display_frame.grid_rowconfigure(0, weight=1)
         self.image_panel = ttk.Label(
@@ -401,9 +401,8 @@ class AcquisitionGUI:
         )
         self.image_panel.grid(row=0, column=0, sticky="nsew")
 
-        # --- Bottom Bar ---
         bottom_bar = ttk.Frame(main_frame)
-        bottom_bar.grid(row=3, column=0, sticky="ew", pady=(5, 0))
+        bottom_bar.grid(row=4, column=0, sticky="ew", pady=(5, 0))
         bottom_bar.grid_columnconfigure(1, weight=1)
         self.run_button = ttk.Button(
             bottom_bar, text="Run Time Series", command=self.start_time_series
@@ -416,59 +415,48 @@ class AcquisitionGUI:
             row=0, column=2, padx=5
         )
 
+    def _browse_save_directory(self):
+        directory = filedialog.askdirectory(
+            title="Select Save Directory", initialdir=self.save_dir_var.get()
+        )
+        if directory:
+            self.save_dir_var.set(directory)
+
     def _bind_traces(self):
-        """Link GUI variable changes to the update function."""
         for var in [
             self.num_time_points_var,
             self.time_interval_s_var,
             self.num_slices_var,
             self.laser_duration_var,
-            self.delay_before_camera_var,
         ]:
             var.trace_add("write", self._update_all_estimates)
         self.minimal_interval_var.trace_add("write", self._update_all_estimates)
 
     def _update_all_estimates(self, *args):
-        """Master function to update all calculated values and estimates."""
         try:
-            # Update settings object from GUI
             self.settings.num_slices = self.num_slices_var.get()
             self.settings.laser_trig_duration_ms = self.laser_duration_var.get()
-            self.settings.delay_before_camera_ms = self.delay_before_camera_var.get()
-
-            # Update derived timing displays
             self.camera_exposure_var.set(f"{self.settings.camera_exposure_ms:.2f} ms")
-            self.delay_before_laser_var.set(
-                f"{self.settings.delay_before_laser_ms:.2f} ms"
-            )
-
-            # Calculate and display minimal interval
             min_interval_s = self._calculate_minimal_interval()
             self.min_interval_display_var.set(f"{min_interval_s:.2f} s")
-
-            # Calculate and display total time
             total_time_str = self._calculate_total_time(min_interval_s)
             self.total_time_display_var.set(total_time_str)
-
         except (tk.TclError, ValueError):
             return
 
     def _calculate_minimal_interval(self) -> float:
-        """Estimate the minimum time to acquire one volume."""
         overhead_factor = 1.10
         total_exposure_ms = self.settings.num_slices * self.settings.camera_exposure_ms
         estimated_ms = total_exposure_ms * overhead_factor
         return estimated_ms / 1000.0
 
     def _calculate_total_time(self, min_interval_s: float) -> str:
-        """Estimate the total time for the entire time series."""
         num_time_points = self.num_time_points_var.get()
         if self.minimal_interval_var.get():
             time_per_volume_s = min_interval_s
         else:
             user_interval_s = self.time_interval_s_var.get()
             time_per_volume_s = max(user_interval_s, min_interval_s)
-
         total_seconds = time_per_volume_s * num_time_points
         h = int(total_seconds // 3600)
         m = int((total_seconds % 3600) // 60)
@@ -481,6 +469,12 @@ class AcquisitionGUI:
         self.acquisition_in_progress = True
         self.run_button.configure(state="disabled")
         self.status_var.set("Initializing...")
+        try:
+            self.pixel_size_um = mmc.getPixelSizeUm()
+            print(f"Using pixel size for metadata: {self.pixel_size_um:.3f} µm")
+        except Exception:
+            self.pixel_size_um = 1.0
+            print("Warning: Could not get pixel size. Defaulting to 1.0 µm.")
         self.settings.step_size_um = self.step_size_var.get()
         self.time_points_total = self.num_time_points_var.get()
         self.current_time_point = 0
@@ -490,6 +484,7 @@ class AcquisitionGUI:
 
     def _start_next_volume(self):
         self.current_time_point += 1
+        self.current_volume_images.clear()
         self.status_var.set(
             f"Starting Time Point {self.current_time_point}/{self.time_points_total}..."
         )
@@ -534,6 +529,8 @@ class AcquisitionGUI:
                     f"Slice {self.images_popped_this_volume}/{self.images_expected_per_volume}"
                 )
                 img_array = self._process_tagged_image(tagged_img)
+                if self.should_save_var.get():
+                    self.current_volume_images.append(img_array)
                 self.display_image(img_array)
             except Exception as e:
                 print(f"Error popping image: {e}")
@@ -551,11 +548,46 @@ class AcquisitionGUI:
             return
         self.root.after(20, self._poll_for_images)
 
+    def _save_current_volume(self):
+        if not self.should_save_var.get() or not self.current_volume_images:
+            return
+        save_dir = self.save_dir_var.get()
+        prefix = self.save_prefix_var.get()
+        if not save_dir or not prefix:
+            self.status_var.set("Error: Save directory or prefix missing.")
+            print("Error: Cannot save. Directory or prefix is missing.")
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{prefix}_T{self.current_time_point:04d}_{timestamp}.tif"
+        full_path = os.path.join(save_dir, filename)
+
+        print(f"Saving volume to: {full_path}")
+        self.status_var.set(f"Saving to {filename}...")
+
+        try:
+            image_stack = np.stack(self.current_volume_images, axis=0)
+            metadata = {
+                "axes": "ZYX",
+                "PhysicalSizeZ": self.settings.step_size_um,
+                "PhysicalSizeY": self.pixel_size_um,
+                "PhysicalSizeX": self.pixel_size_um,
+                "PhysicalSizeZUnit": "micron",
+                "PhysicalSizeYUnit": "micron",
+                "PhysicalSizeXUnit": "micron",
+            }
+            tifffile.imwrite(full_path, image_stack, imagej=True, metadata=metadata)
+            print("Save complete.")
+        except Exception as e:
+            print(f"Error saving file with tifffile: {e}")
+            self.status_var.set("Error: File save failed.")
+
     def _finish_volume(self):
         volume_duration = time.monotonic() - self.volume_start_time
         print(
             f"Volume {self.current_time_point} acquired in {volume_duration:.2f} seconds."
         )
+        self._save_current_volume()
         _reset_for_next_volume()
         if self.current_time_point >= self.time_points_total:
             self._finish_time_series()
