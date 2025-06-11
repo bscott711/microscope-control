@@ -5,8 +5,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "microscope_control"
-version = "0.1.0-refactor"
+# The name of your package inside the 'src' directory
+name = "microscope"
+version = "0.2.0.dev0"
 authors = [
   { name="Brandon Scott", email="brandon.scott@sdsmt.edu" },
 ]
@@ -26,6 +27,7 @@ dependencies = [
     "numpy",
     "tifffile",
     "pillow",
+    "qtpy",
 ]
 
 [project.optional-dependencies]
@@ -38,11 +40,16 @@ dev = [
 Homepage = "https://github.com/bscott711/microscope-control"
 
 [project.scripts]
-# This will allow running the app from the command line after installation
-microscope-control = "microscope_control.__main__:main"
+# FIX: This now correctly points to the 'main' function inside the 'microscope' package.
+microscope-control = "microscope.__main__:main"
 
 
 # --- Tool Configuration ---
+
+[tool.setuptools.packages.find]
+# This tells setuptools to look for your package inside the 'src' directory
+where = ["src"]
+
 
 [tool.ruff]
 # Set the minimum Python version to target for linting.
@@ -50,17 +57,11 @@ target-version = "py39"
 
 [tool.ruff.lint]
 # Rules: https://docs.astral.sh/ruff/rules/
-# Select a base set of rules and add others as needed.
-# "F" - Pyflakes
-# "E" - pycodestyle Error
-# "W" - pycodestyle Warning
-# "I" - isort
-# "UP" - pyupgrade
+# "F" - Pyflakes | "E" - pycodestyle Error | "W" - pycodestyle Warning
+# "I" - isort | "UP" - pyupgrade
 select = ["E", "F", "W", "I", "UP"]
 ignore = []
 
 [tool.ruff.format]
 # Use double quotes for strings where possible.
 quote-style = "double"
-# Like Black, use trailing commas for multi-line expressions.
-
