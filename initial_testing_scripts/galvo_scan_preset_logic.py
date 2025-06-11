@@ -1,8 +1,9 @@
-from pymmcore_plus import CMMCorePlus
-from typing import Optional, List
-import traceback
-import time
 import os
+import time
+import traceback
+from typing import List, Optional
+
+from pymmcore_plus import CMMCorePlus
 
 # Initialize global core instance
 mmc = CMMCorePlus.instance()
@@ -17,30 +18,23 @@ CAMERA_A_LABEL = "Camera-1"
 PLOGIC_LABEL = "PLogic:E:36"
 TIGER_COMM_HUB_LABEL = "TigerCommHub"
 
-# --- PLogic Addresses for Custom Programming ---
-# Input Addresses (Sources)
-PLOGIC_GROUND_ADDR = 0  # Always LOW
-PLOGIC_CAMERA_EXPOSE_TTL_ADDR = 43  # Camera Exposing signal (typically TTL-3)
-
-# Output Addresses (Destinations)
-PLOGIC_LASER1_BNC_ADDR = 37  # BNC 5 for Laser 1
-PLOGIC_LASER2_BNC_ADDR = 38  # BNC 6 for Laser 2 (example)
-
-# Internal Cell Addresses for Logic
-# Using cells from the diagram's "Unused" range
-PLOGIC_TOGGLE_FF_CELL = 6  # Cell to act as the toggle flip-flop
-PLOGIC_LASER1_CELL = 13  # Logic cell controlling BNC5 output
-PLOGIC_LASER2_CELL = 14  # Logic cell controlling BNC6 output
+# --- PLogic Addresses and Presets ---
+# Input Address for the per-slice "Laser Trigger" signal (TTL-5)
+PLOGIC_LASER_TRIGGER_TTL_ADDR = 45
+# Internal Cell Address for the master "laser on" signal
+PLOGIC_LASER_ON_CELL = 10
+# The preset number that configures BNC outputs for laser control
+PLOGIC_LASER_PRESET_NUM = 5
 
 # --- Acquisition Settings ---
-NUM_SLICES_SETTING = 50
+NUM_SLICES_SETTING = 10
 STEP_SIZE_UM = 1.0
 PIEZO_CENTER_UM = -31.0
 SLICE_CALIBRATION_SLOPE_UM_PER_DEG = 100.0
 SLICE_CALIBRATION_OFFSET_UM = 0.0
 CAMERA_MODE_IS_OVERLAP = False
 SCAN_PERIOD_MS = 10.0
-CAMERA_EXPOSURE_MS = 9.0
+CAMERA_EXPOSURE_MS = 10.0
 NUM_SIDES = 1
 FIRST_SIDE_IS_A = True
 SCAN_OPPOSITE_DIRECTIONS = False
@@ -50,8 +44,8 @@ SHEET_OFFSET_DEG = 0.0
 
 
 # --- Low-Level Helper Functions ---
-def _execute_tiger_serial_command(command_string: str, get_response: bool = False):
-    """Sends a command via TigerCommHub and optionally gets a response."""
+def _execute_tiger_serial_command(command_string: str):
+    """Sends a command via TigerCommHub."""
     original_setting = mmc.getProperty(
         TIGER_COMM_HUB_LABEL, "OnlySendSerialCommandOnChange"
     )
@@ -60,14 +54,11 @@ def _execute_tiger_serial_command(command_string: str, get_response: bool = Fals
 
     mmc.setProperty(TIGER_COMM_HUB_LABEL, "SerialCommand", command_string)
 
-    response = None
-    if get_response:
-        time.sleep(0.05)
-        response = mmc.getProperty(TIGER_COMM_HUB_LABEL, "SerialResponse")
-
+    # Restore original setting
     if original_setting == "Yes":
         mmc.setProperty(TIGER_COMM_HUB_LABEL, "OnlySendSerialCommandOnChange", "Yes")
-    return response
+
+    time.sleep(0.01)  # Small delay for command to be processed
 
 
 def set_property(device_label, property_name, value):
@@ -83,67 +74,38 @@ def set_property(device_label, property_name, value):
 
 
 # --- PLogic Configuration Functions ---
-def configure_plogic_for_laser_toggling():
+def configure_plogic_for_laser_control_with_preset():
     """
-    Implements the laser-toggling logic from the user-provided diagram.
-    This routes the main laser trigger to one of two lasers, alternating
-    on each trigger pulse (slice).
+    Configures the PLogic card using a preset for BNC routing, then
+    links the master laser control cell to the camera's expose signal.
     """
-    print("Programming PLogic for laser toggling...")
+    print(f"Programming PLogic using Preset {PLOGIC_LASER_PRESET_NUM}...")
 
-    # Step 1: Configure the Toggle Flip-Flop (Cell 6)
-    # This cell will change state on every rising edge of the camera expose signal.
+    # Step 1: Apply the preset to configure BNC routing.
+    # The command is [Addr#]CCA X=<preset #>
+    _execute_tiger_serial_command(f"{PLOGIC_LABEL[-2:]}CCA X={PLOGIC_LASER_PRESET_NUM}")
+
+    # Step 2: Link the master "laser on" cell (Cell 10) to the camera's expose signal.
+    # This makes the laser trigger follow the camera exposure.
+    print(
+        f"Linking master laser cell ({PLOGIC_LASER_ON_CELL}) to camera expose signal ({PLOGIC_LASER_TRIGGER_TTL_ADDR})..."
+    )
     # M E=cell_addr -> Select cell to edit
-    # CCB X=... -> Set cell's truth table. '3' is a T-FlipFlop.
-    # CCA Z=... -> Set cell's clock input (Z).
-    _execute_tiger_serial_command(f"M E={PLOGIC_TOGGLE_FF_CELL}")
-    _execute_tiger_serial_command("CCB X=3")  # Truth table for Toggle Flip-Flop
-    _execute_tiger_serial_command(
-        f"CCA Z={PLOGIC_CAMERA_EXPOSE_TTL_ADDR}"
-    )  # Clocked by camera expose
+    _execute_tiger_serial_command(f"M E={PLOGIC_LASER_ON_CELL}")
+    # CCA Z=source_addr -> Route the source to the cell's input
+    _execute_tiger_serial_command(f"CCA Z={PLOGIC_LASER_TRIGGER_TTL_ADDR}")
 
-    # Step 2: Configure Laser 1 Output (Cell 13 -> BNC 5)
-    # This acts as an AND gate: Output is HIGH only if Camera is Exposing AND Toggle is LOW.
-    # The toggle flip-flop's inverted output is at its address + 16.
-    toggle_ff_inverted_output_addr = PLOGIC_TOGGLE_FF_CELL + 16
-    _execute_tiger_serial_command(f"M E={PLOGIC_LASER1_CELL}")
-    _execute_tiger_serial_command("CCB X=1")  # Truth table for AND gate
-    _execute_tiger_serial_command(
-        f"CCA Y={PLOGIC_CAMERA_EXPOSE_TTL_ADDR} Z={toggle_ff_inverted_output_addr}"
-    )
-
-    # Step 3: Configure Laser 2 Output (Cell 14 -> BNC 6)
-    # This acts as an AND gate: Output is HIGH only if Camera is Exposing AND Toggle is HIGH.
-    toggle_ff_output_addr = PLOGIC_TOGGLE_FF_CELL
-    _execute_tiger_serial_command(f"M E={PLOGIC_LASER2_CELL}")
-    _execute_tiger_serial_command("CCB X=1")  # Truth table for AND gate
-    _execute_tiger_serial_command(
-        f"CCA Y={PLOGIC_CAMERA_EXPOSE_TTL_ADDR} Z={toggle_ff_output_addr}"
-    )
-
-    # Step 4: Route the logic cell outputs to the physical BNC outputs
-    # Route Cell 13's output to BNC 5
-    _execute_tiger_serial_command(f"M E={PLOGIC_LASER1_BNC_ADDR}")
-    _execute_tiger_serial_command(f"CCA Z={PLOGIC_LASER1_CELL}")
-    # Route Cell 14's output to BNC 6
-    _execute_tiger_serial_command(f"M E={PLOGIC_LASER2_BNC_ADDR}")
-    _execute_tiger_serial_command(f"CCA Z={PLOGIC_LASER2_CELL}")
-
-    print("PLogic laser toggling configured.")
+    print("PLogic laser control configured.")
 
 
-def reset_plogic_toggling_outputs():
+def reset_plogic_outputs():
     """
-    Resets the PLogic BNC outputs to ground after toggling acquisition.
+    Resets the master laser cell to be off. The BNC outputs will follow.
     """
-    print("Resetting PLogic laser outputs to Ground...")
-    # Reset Laser 1 BNC output
-    _execute_tiger_serial_command(f"M E={PLOGIC_LASER1_BNC_ADDR}")
-    _execute_tiger_serial_command(f"CCA Z={PLOGIC_GROUND_ADDR}")
-    # Reset Laser 2 BNC output
-    _execute_tiger_serial_command(f"M E={PLOGIC_LASER2_BNC_ADDR}")
-    _execute_tiger_serial_command(f"CCA Z={PLOGIC_GROUND_ADDR}")
-    print("PLogic laser outputs reset.")
+    print("Resetting PLogic master laser cell to OFF...")
+    _execute_tiger_serial_command(f"M E={PLOGIC_LASER_ON_CELL}")
+    _execute_tiger_serial_command("CCA Z=0")  # Set input to ground (always off)
+    print("PLogic outputs reset.")
 
 
 # --- Calculations ---
@@ -179,12 +141,12 @@ def configure_devices_for_slice_scan(
     piezo_fixed_position_um,
     num_slices_ctrl,
 ):
-    """Configures Galvo and Piezo stages for the SPIM acquisition."""
+    """Configures Galvo, Piezo, and PLogic for the SPIM acquisition."""
     print("Preparing controller for SLICE_SCAN_ONLY on Side A...")
     set_property(GALVO_A_LABEL, "BeamEnabled", "Yes")
 
-    # Use the new, more advanced toggling configuration
-    configure_plogic_for_laser_toggling()
+    # Use the new, preset-based PLogic configuration
+    configure_plogic_for_laser_control_with_preset()
 
     # Galvo Device Configuration
     set_property(GALVO_A_LABEL, "SPIMNumSlicesPerPiezo", 1)
@@ -229,7 +191,7 @@ def cleanup_slice_scan_devices():
     set_property(PIEZO_A_LABEL, "SingleAxisOffset(um)", PIEZO_CENTER_UM)
     set_property(PIEZO_A_LABEL, "SPIMState", "Idle")
 
-    reset_plogic_toggling_outputs()
+    reset_plogic_outputs()
     print("--- Cleanup Complete ---")
 
 
@@ -340,9 +302,7 @@ class HardwareInterface:
     def find_and_set_trigger_mode(
         self, camera_label: str, desired_modes: List[str]
     ) -> bool:
-        """
-        Finds and sets the first available trigger mode from a preferred list.
-        """
+        """Finds and sets the first available trigger mode from a preferred list."""
         if camera_label not in mmc.getLoadedDevices():
             print(f"Error: Camera device '{camera_label}' not found.")
             return False
@@ -382,12 +342,8 @@ def run_acquisition_sequence(hw_interface: HardwareInterface):
     try:
         mmc.setCameraDevice(hw_interface.camera1)
 
-        external_trigger_modes = [
-            "External",
-            "External Trigger",
-            "External Start",
-            "Edge Trigger",
-        ]
+        external_trigger_modes = ["Edge Trigger"]
+
         if not hw_interface.find_and_set_trigger_mode(
             hw_interface.camera1, external_trigger_modes
         ):
