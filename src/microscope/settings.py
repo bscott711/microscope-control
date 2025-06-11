@@ -5,18 +5,16 @@ Configuration dataclasses for the microscope control application.
 This module centralizes settings to make them easily accessible to different
 parts of the application, such as the GUI and the acquisition engine.
 """
-
 from dataclasses import dataclass
 
 
 @dataclass
 class AcquisitionSettings:
     """Stores all user-configurable acquisition parameters."""
-
-    # These will be set by the GUI in the future
     num_slices: int = 10
     step_size_um: float = 1.0
     laser_trig_duration_ms: float = 10.0
+    # These will be set by the GUI in the future
     time_points: int = 1
     time_interval_s: float = 0.0
     is_minimal_interval: bool = True
@@ -43,16 +41,21 @@ class AcquisitionSettings:
 @dataclass
 class HardwareConstants:
     """Stores fixed hardware configuration and device labels."""
-
-    # NOTE: In a real-world scenario, you might load these from a config file
-    PIEZO_CENTER_UM: float = -31.0
     CFG_PATH: str = "hardware_profiles/20250523-OPM.cfg"
-    # Device labels
-    GALVO_A_LABEL: str = "Scanner:AB:33"
-    PIEZO_A_LABEL: str = "PiezoStage:P:34"
+
+    # --- Device Labels from Hardware Config ---
     CAMERA_A_LABEL: str = "Camera-1"
-    PLOGIC_LABEL: str = "PLogic:E:36"
+    CAMERA_B_LABEL: str = "Camera-2"
     TIGER_COMM_HUB_LABEL: str = "TigerCommHub"
+    GALVO_A_LABEL: str = "Scanner:AB:33"
+    PLOGIC_LABEL: str = "PLogic:E:36"
+
+    # Navigation Device Labels
+    XY_STAGE_LABEL: str = "XYStage:XY:31"
+    Z_PIEZO_LABEL: str = "PiezoStage:P:34"
+    Z_STAGE_LABEL: str = "ZStage:Z:32"
+    FILTER_Z_STAGE_LABEL: str = "ZStage:F:35"
+
     # PLogic addresses and presets
     PLOGIC_CAMERA_TRIGGER_TTL_ADDR: int = 44
     PLOGIC_LASER_TRIGGER_TTL_ADDR: int = 45

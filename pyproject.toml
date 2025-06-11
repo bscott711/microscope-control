@@ -54,6 +54,10 @@ where = ["src"]
 [tool.ruff]
 # Set the minimum Python version to target for linting.
 target-version = "py39"
+exclude = [
+    "initial_testing_scripts",
+    "docs",        # Exclude documentation files
+]
 
 [tool.ruff.lint]
 # Rules: https://docs.astral.sh/ruff/rules/
@@ -61,6 +65,9 @@ target-version = "py39"
 # "I" - isort | "UP" - pyupgrade
 select = ["E", "F", "W", "I", "UP"]
 ignore = []
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
 
 [tool.ruff.format]
 # Use double quotes for strings where possible.
