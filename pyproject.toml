@@ -58,6 +58,7 @@ exclude = [
     "initial_testing_scripts",
     "docs",        # Exclude documentation files
 ]
+line-length = 120
 
 [tool.ruff.lint]
 # Rules: https://docs.astral.sh/ruff/rules/

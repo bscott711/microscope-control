@@ -43,12 +43,8 @@ class AxisControlWidget(QWidget):
         self.position_display.setReadOnly(True)
         self.position_display.setAlignment(Qt.AlignmentFlag.AlignRight)
 
-        self.step_spinbox = QDoubleSpinBox(
-            value=1.0, singleStep=0.1, minimum=0.01, maximum=1000.0, decimals=2
-        )
-        self.goto_spinbox = QDoubleSpinBox(
-            minimum=-100000.0, maximum=100000.0, decimals=2
-        )
+        self.step_spinbox = QDoubleSpinBox(value=1.0, singleStep=0.1, minimum=0.01, maximum=1000.0, decimals=2)
+        self.goto_spinbox = QDoubleSpinBox(minimum=-100000.0, maximum=100000.0, decimals=2)
 
         self.jog_fwd_button = QPushButton("▶")
         self.jog_bwd_button = QPushButton("◀")
@@ -76,22 +72,12 @@ class AxisControlWidget(QWidget):
 
     def _connect_signals(self):
         """Connect widget signals to internal handlers."""
-        self.goto_button.clicked.connect(
-            lambda: self.move_to_requested.emit(self.goto_spinbox.value())
-        )
-        self.rel_fwd_button.clicked.connect(
-            lambda: self.move_by_requested.emit(self.step_spinbox.value())
-        )
-        self.rel_bwd_button.clicked.connect(
-            lambda: self.move_by_requested.emit(-self.step_spinbox.value())
-        )
+        self.goto_button.clicked.connect(lambda: self.move_to_requested.emit(self.goto_spinbox.value()))
+        self.rel_fwd_button.clicked.connect(lambda: self.move_by_requested.emit(self.step_spinbox.value()))
+        self.rel_bwd_button.clicked.connect(lambda: self.move_by_requested.emit(-self.step_spinbox.value()))
         # Jog speed is 10x the relative step size
-        self.jog_fwd_button.pressed.connect(
-            lambda: self.jog_started.emit(self.step_spinbox.value() * 10)
-        )
-        self.jog_bwd_button.pressed.connect(
-            lambda: self.jog_started.emit(-self.step_spinbox.value() * 10)
-        )
+        self.jog_fwd_button.pressed.connect(lambda: self.jog_started.emit(self.step_spinbox.value() * 10))
+        self.jog_bwd_button.pressed.connect(lambda: self.jog_started.emit(-self.step_spinbox.value() * 10))
         self.jog_fwd_button.released.connect(self.jog_stopped.emit)
         self.jog_bwd_button.released.connect(self.jog_stopped.emit)
 
@@ -135,12 +121,8 @@ class NavigationPanel(QGroupBox):
     def _connect_signals(self):
         """Connect signals from child widgets to this panel's public signals."""
         for axis_name, widget in self.axis_widgets.items():
-            widget.move_to_requested.connect(
-                partial(self.move_to_requested.emit, axis_name)
-            )
-            widget.move_by_requested.connect(
-                partial(self.move_by_requested.emit, axis_name)
-            )
+            widget.move_to_requested.connect(partial(self.move_to_requested.emit, axis_name))
+            widget.move_by_requested.connect(partial(self.move_by_requested.emit, axis_name))
             widget.jog_started.connect(partial(self.jog_started.emit, axis_name))
             widget.jog_stopped.connect(partial(self.jog_stopped.emit, axis_name))
         self.stop_all_button.clicked.connect(self.stop_all_requested.emit)

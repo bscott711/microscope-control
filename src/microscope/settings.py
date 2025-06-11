@@ -17,7 +17,6 @@ class AcquisitionSettings:
     step_size_um: float = 1.0
     laser_trig_duration_ms: float = 10.0
     piezo_center_um: float = -31.0
-    # These will be set by the GUI in the future
     time_points: int = 1
     time_interval_s: float = 0.0
     is_minimal_interval: bool = True
@@ -47,13 +46,11 @@ class HardwareConstants:
 
     CFG_PATH: str = "hardware_profiles/20250523-OPM.cfg"
 
-    # --- Device Labels from Hardware Config ---
+    # Device Labels
     CAMERA_A_LABEL: str = "Camera-1"
     TIGER_COMM_HUB_LABEL: str = "TigerCommHub"
     GALVO_A_LABEL: str = "Scanner:AB:33"
     PLOGIC_LABEL: str = "PLogic:E:36"
-
-    # Navigation Device Labels
     XY_STAGE_LABEL: str = "XYStage:XY:31"
     Z_PIEZO_LABEL: str = "PiezoStage:P:34"
     Z_STAGE_LABEL: str = "ZStage:Z:32"
@@ -66,13 +63,16 @@ class HardwareConstants:
     PLOGIC_4KHZ_CLOCK_ADDR: int = 192
     PLOGIC_LASER_ON_CELL: int = 10
     PLOGIC_LASER_PRESET_NUM: int = 5
+    PLOGIC_DELAY_BEFORE_LASER_CELL: int = 11  # ← Added
+    PLOGIC_DELAY_BEFORE_CAMERA_CELL: int = 12  # ← Added
+
     PULSES_PER_MS: float = 4.0
 
     # Calibration
     SLICE_CALIBRATION_SLOPE_UM_PER_DEG: float = 100.0
     SLICE_CALIBRATION_OFFSET_UM: float = 0.0
 
-    # --- SPIM Parameters (from working tkinter script) ---
+    # SPIM Parameters
     DELAY_BEFORE_SCAN_MS: float = 0.0
     LINE_SCANS_PER_SLICE: int = 1
     LINE_SCAN_DURATION_MS: float = 1.0

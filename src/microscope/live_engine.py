@@ -50,10 +50,7 @@ class LiveEngine(QObject):
         while self._running:
             if self._live:
                 # Live View Mode
-                if (
-                    self.hw.mmc.isSequenceRunning()
-                    and self.hw.mmc.getRemainingImageCount() > 0
-                ):
+                if self.hw.mmc.isSequenceRunning() and self.hw.mmc.getRemainingImageCount() > 0:
                     try:
                         tagged_img = self.hw.mmc.popNextTaggedImage()
                         img = tagged_img.pix.reshape(

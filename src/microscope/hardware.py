@@ -47,9 +47,10 @@ class HardwareController:
         if original_setting == "Yes":
             self.mmc.setProperty(hub, "OnlySendSerialCommandOnChange", "No")
         self.mmc.setProperty(hub, "SerialCommand", command)
+        print(f"[SERIAL] Sending: {command}")
+        self.mmc.waitForDevice(hub)
         if original_setting == "Yes":
             self.mmc.setProperty(hub, "OnlySendSerialCommandOnChange", "Yes")
-        self.mmc.waitForDevice(hub)
 
     def _set_property(self, device_label: str, prop: str, value):
         """Safely sets a property on a device if it exists and has changed."""
@@ -80,38 +81,88 @@ class HardwareController:
         # Arm SPIM devices
         self._arm_spim_devices()
 
-    def _configure_plogic(self, settings: AcquisitionSettings):
         """Programs the PLogic card for timed laser and camera pulses."""
         plogic_addr = self.const.PLOGIC_LABEL[-2:]
         print(f"Programming PLogic at {plogic_addr}")
 
-        self._execute_tiger_serial_command(
-            f"{plogic_addr}CCA X={self.const.PLOGIC_LASER_PRESET_NUM}"
-        )
+        # --- Laser Pulse Configuration ---
+        self._execute_tiger_serial_command(f"{plogic_addr}CCA X={self.const.PLOGIC_LASER_PRESET_NUM}")
         self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_LASER_ON_CELL}")
         self._execute_tiger_serial_command("CCA Y=14")
         cycles = int(settings.laser_trig_duration_ms * self.const.PULSES_PER_MS)
         self._execute_tiger_serial_command(f"CCA Z={cycles}")
         cam_ttl = self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR
+        galvo_ttl = self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR
         clock_addr = self.const.PLOGIC_4KHZ_CLOCK_ADDR
-        cmd = f"CCB X={cam_ttl} Y={clock_addr}"
-        self._execute_tiger_serial_command(cmd)
 
-        # Optional: Delay before laser
+        # --- Delay Before Laser ---
+        self._execute_tiger_serial_command("CCA Y=13")
         delay_cycles = int(settings.delay_before_laser_ms * self.const.PULSES_PER_MS)
-        self._execute_tiger_serial_command("CCA Y=13")
         self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-        self._execute_tiger_serial_command(
-            f"CCB X={self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR} Y={clock_addr}"
-        )
+        self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
+        self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_LASER_CELL}")
 
-        # Optional: Delay before camera
-        delay_cycles = int(settings.delay_before_camera_ms * self.const.PULSES_PER_MS)
+        # --- Delay Before Camera ---
         self._execute_tiger_serial_command("CCA Y=13")
+        delay_cycles = int(settings.delay_before_camera_ms * self.const.PULSES_PER_MS)
         self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-        self._execute_tiger_serial_command(
-            f"CCB X={self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR} Y={clock_addr}"
-        )
+        self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
+        self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_CAMERA_CELL}")
+
+        # --- Re-enable Galvo Trigger Chain (Critical!) ---
+        self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
+
+        # --- Enable Clock Output ---
+        self._execute_tiger_serial_command(f"{plogic_addr}M D={clock_addr}")  # Enable 4kHz clock
+        self._execute_tiger_serial_command(f"{plogic_addr}M E={cam_ttl}")  # Enable camera trigger
+
+        # Re-enable Galvo TTL chain
+        self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
+
+    def _configure_plogic(self, settings: AcquisitionSettings):
+        if getattr(self, "is_configuring", False):
+            print("Already configuring PLogic. Skipping.")
+            return
+        self.is_configuring = True
+        try:
+            self._reset_plogic()  # Reset PLogic before reprogramming
+
+            plogic_addr = self.const.PLOGIC_LABEL[-2:]
+            print(f"Programming PLogic at {plogic_addr}")
+
+            # --- Laser Pulse Configuration ---
+            self._execute_tiger_serial_command(f"{plogic_addr}CCA X={self.const.PLOGIC_LASER_PRESET_NUM}")
+            self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_LASER_ON_CELL}")
+            self._execute_tiger_serial_command("CCA Y=14")
+            cycles = int(settings.laser_trig_duration_ms * self.const.PULSES_PER_MS)
+            self._execute_tiger_serial_command(f"CCA Z={cycles}")
+            cam_ttl = self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR
+            galvo_ttl = self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR
+            clock_addr = self.const.PLOGIC_4KHZ_CLOCK_ADDR
+
+            # --- Delay Before Laser ---
+            self._execute_tiger_serial_command("CCA Y=13")
+            delay_cycles = int(settings.delay_before_laser_ms * self.const.PULSES_PER_MS)
+            self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
+            self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
+            self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_LASER_CELL}")
+
+            # --- Delay Before Camera ---
+            self._execute_tiger_serial_command("CCA Y=13")
+            delay_cycles = int(settings.delay_before_camera_ms * self.const.PULSES_PER_MS)
+            self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
+            self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
+            self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_CAMERA_CELL}")
+
+            # --- Enable Clock Output ---
+            self._execute_tiger_serial_command(f"{plogic_addr}M D={clock_addr}")  # Enable 4kHz clock
+            self._execute_tiger_serial_command(f"{plogic_addr}M E={cam_ttl}")  # Enable camera trigger
+
+            # --- Reconnect Galvo TTL Line (critical!) ---
+            self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
+
+        finally:
+            self.is_configuring = False
 
     def _configure_spim_scan(self, settings: AcquisitionSettings):
         """Sets all SPIM properties on the Tiger controller."""
@@ -123,57 +174,35 @@ class HardwareController:
             raise ValueError("Slice calibration slope cannot be zero.")
 
         try:
-            current_offset_deg_str = self.mmc.getProperty(
-                galvo, "SingleAxisYOffset(deg)"
-            )
+            current_offset_deg_str = self.mmc.getProperty(galvo, "SingleAxisYOffset(deg)")
             self.initial_galvo_y_offset = float(current_offset_deg_str)
         except Exception:
             print("Warn: Could not get galvo offset. Defaulting to 0.")
             self.initial_galvo_y_offset = 0.0
 
         num_slices_ctrl = settings.num_slices
-        if self.const.CAMERA_MODE_IS_OVERLAP:
-            if num_slices_ctrl > 1:
-                num_slices_ctrl += 1
-
         piezo_travel_um = (settings.num_slices - 1) * settings.step_size_um
         galvo_amplitude_deg = piezo_travel_um / slope
 
         # Galvo Setup
         self._set_property(galvo, "SPIMNumSlices", num_slices_ctrl)
-        self._set_property(
-            galvo, "SingleAxisYAmplitude(deg)", round(galvo_amplitude_deg, 4)
-        )
-        self._set_property(
-            galvo, "SingleAxisYOffset(deg)", round(self.initial_galvo_y_offset, 4)
-        )
-        self._set_property(
-            galvo, "SPIMNumSlicesPerPiezo", self.const.LINE_SCANS_PER_SLICE
-        )
-        self._set_property(
-            galvo, "SPIMDelayBeforeRepeat(ms)", self.const.DELAY_BEFORE_SCAN_MS
-        )
+        self._set_property(galvo, "SingleAxisYAmplitude(deg)", round(galvo_amplitude_deg, 4))
+        self._set_property(galvo, "SingleAxisYOffset(deg)", round(self.initial_galvo_y_offset, 4))
+        self._set_property(galvo, "SPIMNumSlicesPerPiezo", self.const.LINE_SCANS_PER_SLICE)
+        self._set_property(galvo, "SPIMDelayBeforeRepeat(ms)", self.const.DELAY_BEFORE_SCAN_MS)
         self._set_property(galvo, "SPIMNumRepeats", 1)
-        self._set_property(
-            galvo, "SPIMDelayBeforeSide(ms)", self.const.DELAY_BEFORE_SIDE_MS
-        )
+        self._set_property(galvo, "SPIMDelayBeforeSide(ms)", self.const.DELAY_BEFORE_SIDE_MS)
         self._set_property(
             galvo,
             "SPIMAlternateDirectionsEnable",
             "Yes" if self.const.SCAN_OPPOSITE_DIRECTIONS else "No",
         )
-        self._set_property(
-            galvo, "SPIMScanDuration(ms)", self.const.LINE_SCAN_DURATION_MS
-        )
+        self._set_property(galvo, "SPIMScanDuration(ms)", self.const.LINE_SCAN_DURATION_MS)
         self._set_property(galvo, "SPIMNumSides", self.const.NUM_SIDES)
-        self._set_property(
-            galvo, "SPIMFirstSide", "A" if self.const.FIRST_SIDE_IS_A else "B"
-        )
+        self._set_property(galvo, "SPIMFirstSide", "A" if self.const.FIRST_SIDE_IS_A else "B")
         self._set_property(galvo, "SPIMPiezoHomeDisable", "No")
         self._set_property(galvo, "SPIMInterleaveSidesEnable", "No")
-        self._set_property(
-            galvo, "SingleAxisXAmplitude(deg)", self.const.SHEET_WIDTH_DEG
-        )
+        self._set_property(galvo, "SingleAxisXAmplitude(deg)", self.const.SHEET_WIDTH_DEG)
         self._set_property(galvo, "SingleAxisXOffset(deg)", self.const.SHEET_OFFSET_DEG)
 
         # Piezo Setup
@@ -185,6 +214,11 @@ class HardwareController:
         """Sets the SPIM state of relevant devices to 'Armed'."""
         self._set_property(self.const.GALVO_A_LABEL, "SPIMState", "Armed")
         self._set_property(self.const.Z_PIEZO_LABEL, "SPIMState", "Armed")
+
+    def _reset_plogic(self):
+        plogic_addr = self.const.PLOGIC_LABEL[-2:]
+        print("[DEBUG] Resetting PLogic...")
+        self._execute_tiger_serial_command(f"{plogic_addr}M R")  # Reset command
 
     def trigger_acquisition(self):
         """Sends the master trigger to start the armed sequence."""
@@ -199,9 +233,7 @@ class HardwareController:
         self._set_property(galvo, "SPIMState", "Idle")
         self._set_property(self.const.Z_PIEZO_LABEL, "SPIMState", "Idle")
         self._set_property(galvo, "SingleAxisYOffset(deg)", self.initial_galvo_y_offset)
-        self._set_property(
-            self.const.Z_PIEZO_LABEL, "SingleAxisOffset(um)", settings.piezo_center_um
-        )
+        self._set_property(self.const.Z_PIEZO_LABEL, "SingleAxisOffset(um)", settings.piezo_center_um)
         self.find_and_set_trigger_mode("Internal Trigger")
 
     def start_live_scan(self, exposure_ms: float):
@@ -228,13 +260,14 @@ class HardwareController:
         print("Move complete.")
 
     def set_relative_position(self, device_label: str, offset: float):
-        """Moves a 1D stage by a relative offset."""
+        """Moves a 1D stage by a relative amount."""
         current_pos = self.get_position(device_label)
         self.set_position(device_label, current_pos + offset)
 
     def get_all_positions(self) -> dict[str, float]:
-        """Queries and returns the positions of all primary navigation axes."""
+        """Queries and returns the positions of all major axes."""
         positions = {}
+
         try:
             x = self.mmc.getXPosition(self.const.XY_STAGE_LABEL)
             y = self.mmc.getYPosition(self.const.XY_STAGE_LABEL)
@@ -293,15 +326,12 @@ class HardwareController:
         """Sets the camera trigger mode."""
         if self.is_demo:
             return True
-
         cam = self.const.CAMERA_A_LABEL
         if not self.mmc.hasProperty(cam, "TriggerMode"):
             return False
-
         allowed = self.mmc.getAllowedPropertyValues(cam, "TriggerMode")
         if mode in allowed:
             self._set_property(cam, "TriggerMode", mode)
             return True
-
         print(f"Warn: Mode '{mode}' not supported. Allowed: {allowed}")
         return False
