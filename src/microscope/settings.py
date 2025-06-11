@@ -5,12 +5,14 @@ Configuration dataclasses for the microscope control application.
 This module centralizes settings to make them easily accessible to different
 parts of the application, such as the GUI and the acquisition engine.
 """
+
 from dataclasses import dataclass
 
 
 @dataclass
 class AcquisitionSettings:
     """Stores all user-configurable acquisition parameters."""
+
     num_slices: int = 10
     step_size_um: float = 1.0
     laser_trig_duration_ms: float = 10.0
@@ -41,11 +43,11 @@ class AcquisitionSettings:
 @dataclass
 class HardwareConstants:
     """Stores fixed hardware configuration and device labels."""
+
     CFG_PATH: str = "hardware_profiles/20250523-OPM.cfg"
 
     # --- Device Labels from Hardware Config ---
     CAMERA_A_LABEL: str = "Camera-1"
-    CAMERA_B_LABEL: str = "Camera-2"
     TIGER_COMM_HUB_LABEL: str = "TigerCommHub"
     GALVO_A_LABEL: str = "Scanner:AB:33"
     PLOGIC_LABEL: str = "PLogic:E:36"
@@ -55,6 +57,8 @@ class HardwareConstants:
     Z_PIEZO_LABEL: str = "PiezoStage:P:34"
     Z_STAGE_LABEL: str = "ZStage:Z:32"
     FILTER_Z_STAGE_LABEL: str = "ZStage:F:35"
+    # Note: Joystick/Wheel are not loaded as top-level devices.
+    # They are controlled via properties on other ASI devices.
 
     # PLogic addresses and presets
     PLOGIC_CAMERA_TRIGGER_TTL_ADDR: int = 44

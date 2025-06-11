@@ -7,7 +7,6 @@ It provides a clean, high-level API for the acquisition engine to use,
 without exposing the underlying `pymmcore-plus` details.
 """
 
-
 from pymmcore_plus import CMMCorePlus
 
 from .settings import AcquisitionSettings, HardwareConstants
