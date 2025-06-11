@@ -16,6 +16,7 @@ class AcquisitionSettings:
     num_slices: int = 10
     step_size_um: float = 1.0
     laser_trig_duration_ms: float = 10.0
+    piezo_center_um: float = -31.0
     # These will be set by the GUI in the future
     time_points: int = 1
     time_interval_s: float = 0.0
@@ -57,8 +58,6 @@ class HardwareConstants:
     Z_PIEZO_LABEL: str = "PiezoStage:P:34"
     Z_STAGE_LABEL: str = "ZStage:Z:32"
     FILTER_Z_STAGE_LABEL: str = "ZStage:F:35"
-    # Note: Joystick/Wheel are not loaded as top-level devices.
-    # They are controlled via properties on other ASI devices.
 
     # PLogic addresses and presets
     PLOGIC_CAMERA_TRIGGER_TTL_ADDR: int = 44
@@ -67,9 +66,20 @@ class HardwareConstants:
     PLOGIC_4KHZ_CLOCK_ADDR: int = 192
     PLOGIC_LASER_ON_CELL: int = 10
     PLOGIC_LASER_PRESET_NUM: int = 5
-    PLOGIC_DELAY_BEFORE_LASER_CELL: int = 11
-    PLOGIC_DELAY_BEFORE_CAMERA_CELL: int = 12
     PULSES_PER_MS: float = 4.0
+
     # Calibration
     SLICE_CALIBRATION_SLOPE_UM_PER_DEG: float = 100.0
     SLICE_CALIBRATION_OFFSET_UM: float = 0.0
+
+    # --- SPIM Parameters (from working tkinter script) ---
+    DELAY_BEFORE_SCAN_MS: float = 0.0
+    LINE_SCANS_PER_SLICE: int = 1
+    LINE_SCAN_DURATION_MS: float = 1.0
+    NUM_SIDES: int = 1
+    FIRST_SIDE_IS_A: bool = True
+    SCAN_OPPOSITE_DIRECTIONS: bool = False
+    SHEET_WIDTH_DEG: float = 0.5
+    SHEET_OFFSET_DEG: float = 0.0
+    DELAY_BEFORE_SIDE_MS: float = 0.0
+    CAMERA_MODE_IS_OVERLAP: bool = False

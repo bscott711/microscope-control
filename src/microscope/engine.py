@@ -8,13 +8,14 @@ designed to be run in a separate thread from the GUI to ensure responsiveness.
 
 import os
 import time
+import traceback
 from datetime import datetime
 
 import numpy as np
 import tifffile
 from PySide6.QtCore import QObject, Signal
 
-from .display import normalize_to_8bit  # <--- IMPORT THE NEW FUNCTION
+from .display import normalize_to_8bit
 from .hardware import HardwareController
 from .settings import AcquisitionSettings
 
@@ -100,17 +101,17 @@ class AcquisitionEngine(QObject):
         except Exception as e:
             self.status_updated.emit(f"Error: {e}")
             print(f"An error occurred in the acquisition engine: {e}")
-            import traceback
-
             traceback.print_exc()
         finally:
             print("Engine finishing up...")
-            self.hw.final_cleanup()
+            self.hw.final_cleanup(self.settings)
             self.acquisition_finished.emit()
             self._is_running = False
 
     def _acquire_volume(self):
         """Acquires a single Z-stack."""
+        # This command is CRITICAL to prepare memory for the sequence.
+        self.hw.mmc.initializeCircularBuffer()
         self.hw.mmc.startSequenceAcquisition(self.settings.num_slices, 0, True)
         self.hw.trigger_acquisition()
 

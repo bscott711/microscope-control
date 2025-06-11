@@ -67,9 +67,11 @@ class HardwareController:
     def setup_for_acquisition(self, settings: AcquisitionSettings):
         """Configures all devices for a triggered Z-stack acquisition."""
         print("Configuring devices for acquisition...")
+        self.mmc.setCameraDevice(self.const.CAMERA_A_LABEL)
         self.mmc.setExposure(settings.camera_exposure_ms)
+        self._set_property(self.const.GALVO_A_LABEL, "BeamEnabled", "Yes")
         self._configure_plogic(settings)
-        self._configure_galvo_for_scan(settings)
+        self._configure_spim_scan(settings)
         self._arm_spim_devices()
         self.find_and_set_trigger_mode("Edge Trigger")
 
@@ -89,9 +91,10 @@ class HardwareController:
         cmd = f"CCB X={cam_ttl} Y={clock_addr}"
         self._execute_tiger_serial_command(cmd)
 
-    def _configure_galvo_for_scan(self, settings: AcquisitionSettings):
-        """Calculates and sets galvo parameters for a Z-stack."""
+    def _configure_spim_scan(self, settings: AcquisitionSettings):
+        """Sets all SPIM properties on the Tiger controller."""
         galvo = self.const.GALVO_A_LABEL
+        piezo = self.const.Z_PIEZO_LABEL
         slope = self.const.SLICE_CALIBRATION_SLOPE_UM_PER_DEG
         if abs(slope) < 1e-9:
             raise ValueError("Slice calibration slope cannot be zero.")
@@ -100,39 +103,82 @@ class HardwareController:
             current_offset_deg_str = self.mmc.getProperty(
                 galvo, "SingleAxisYOffset(deg)"
             )
-            current_galvo_offset_deg = float(current_offset_deg_str)
+            self.initial_galvo_y_offset = float(current_offset_deg_str)
         except Exception:
-            print("Warn: Could not get galvo offset. Defaulting to 0 for demo mode.")
-            current_galvo_offset_deg = 0.0
-        self.initial_galvo_y_offset = current_galvo_offset_deg
+            print("Warn: Could not get galvo offset. Defaulting to 0.")
+            self.initial_galvo_y_offset = 0.0
 
-        piezo_equivalent_travel = (settings.num_slices - 1) * settings.step_size_um
-        galvo_amplitude_deg = piezo_equivalent_travel / slope
+        num_slices_ctrl = settings.num_slices
+        if self.const.CAMERA_MODE_IS_OVERLAP:
+            if num_slices_ctrl > 1:
+                num_slices_ctrl += 1
 
-        self._set_property(galvo, "SPIMNumSlices", settings.num_slices)
+        piezo_travel_um = (settings.num_slices - 1) * settings.step_size_um
+        galvo_amplitude_deg = piezo_travel_um / slope
+
+        # Set Galvo properties
+        self._set_property(galvo, "SPIMNumSlices", num_slices_ctrl)
         self._set_property(
             galvo, "SingleAxisYAmplitude(deg)", round(galvo_amplitude_deg, 4)
         )
         self._set_property(
-            galvo, "SingleAxisYOffset(deg)", round(current_galvo_offset_deg, 4)
+            galvo, "SingleAxisYOffset(deg)", round(self.initial_galvo_y_offset, 4)
         )
+        self._set_property(
+            galvo, "SPIMNumSlicesPerPiezo", self.const.LINE_SCANS_PER_SLICE
+        )
+        self._set_property(
+            galvo, "SPIMDelayBeforeRepeat(ms)", self.const.DELAY_BEFORE_SCAN_MS
+        )
+        self._set_property(galvo, "SPIMNumRepeats", 1)
+        self._set_property(
+            galvo, "SPIMDelayBeforeSide(ms)", self.const.DELAY_BEFORE_SIDE_MS
+        )
+        self._set_property(
+            galvo,
+            "SPIMAlternateDirectionsEnable",
+            "Yes" if self.const.SCAN_OPPOSITE_DIRECTIONS else "No",
+        )
+        self._set_property(
+            galvo, "SPIMScanDuration(ms)", self.const.LINE_SCAN_DURATION_MS
+        )
+        self._set_property(galvo, "SPIMNumSides", self.const.NUM_SIDES)
+        self._set_property(
+            galvo, "SPIMFirstSide", "A" if self.const.FIRST_SIDE_IS_A else "B"
+        )
+        self._set_property(galvo, "SPIMPiezoHomeDisable", "No")
+        self._set_property(galvo, "SPIMInterleaveSidesEnable", "No")
+        self._set_property(
+            galvo, "SingleAxisXAmplitude(deg)", self.const.SHEET_WIDTH_DEG
+        )
+        self._set_property(galvo, "SingleAxisXOffset(deg)", self.const.SHEET_OFFSET_DEG)
+
+        # Set Piezo properties
+        self._set_property(piezo, "SingleAxisAmplitude(um)", 0.0)
+        self._set_property(piezo, "SingleAxisOffset(um)", settings.piezo_center_um)
+        self._set_property(piezo, "SPIMNumSlices", num_slices_ctrl)
 
     def _arm_spim_devices(self):
         """Sets the SPIM state of relevant devices to 'Armed'."""
         self._set_property(self.const.GALVO_A_LABEL, "SPIMState", "Armed")
+        self._set_property(self.const.Z_PIEZO_LABEL, "SPIMState", "Armed")
 
     def trigger_acquisition(self):
         """Sends the master trigger to start the armed sequence."""
         print("Triggering acquisition...")
         self._set_property(self.const.GALVO_A_LABEL, "SPIMState", "Running")
 
-    def final_cleanup(self):
+    def final_cleanup(self, settings: AcquisitionSettings):
         """Resets hardware to a safe, idle state after acquisition."""
         print("Performing final hardware cleanup...")
         galvo = self.const.GALVO_A_LABEL
         self._set_property(galvo, "BeamEnabled", "No")
         self._set_property(galvo, "SPIMState", "Idle")
+        self._set_property(self.const.Z_PIEZO_LABEL, "SPIMState", "Idle")
         self._set_property(galvo, "SingleAxisYOffset(deg)", self.initial_galvo_y_offset)
+        self._set_property(
+            self.const.Z_PIEZO_LABEL, "SingleAxisOffset(um)", settings.piezo_center_um
+        )
         self.find_and_set_trigger_mode("Internal Trigger")
 
     # --- Live Scan & Navigation Methods ---
@@ -187,12 +233,9 @@ class HardwareController:
             positions["Filter-Z"] = 0.0
         return positions
 
-    # --- NEW: Jogging Methods ---
     def start_jog(self, device_label: str, speed_microns_per_sec: float):
         """Starts jogging a stage continuously."""
         print(f"Jogging {device_label} at {speed_microns_per_sec} µm/s")
-        # Note: The real implementation might require specific serial commands
-        # to the Tiger controller. This is a placeholder for that logic.
         if self.is_demo:
             print("[DEMO] Jogging started.")
 
@@ -205,7 +248,6 @@ class HardwareController:
     def stop_all_stages(self):
         """Stops all movement on all stages."""
         print("STOPPING ALL STAGE MOVEMENT")
-        # Stop all relevant stages individually
         for stage_label in [
             self.const.XY_STAGE_LABEL,
             self.const.Z_PIEZO_LABEL,
@@ -221,9 +263,6 @@ class HardwareController:
     def get_pixel_size_um(self) -> float:
         """Returns the camera pixel size from Micro-Manager."""
         try:
-            # Use a keyword argument to disambiguate the overloaded method.
-            # Ignore the type checker warning, as it struggles with the dynamic
-            # nature of pymmcore-plus method overloads.
             return self.mmc.getPixelSizeUm(xyOrZStageLabel=self.const.XY_STAGE_LABEL)  # type: ignore
         except Exception:
             print("Warn: Could not get pixel size. Defaulting to 0.120 µm.")
