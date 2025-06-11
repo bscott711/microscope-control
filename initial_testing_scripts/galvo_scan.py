@@ -1,8 +1,9 @@
-from pymmcore_plus import CMMCorePlus
-from typing import Optional, Dict
-import traceback
-import time
 import os
+import time
+import traceback
+from typing import Dict, Optional
+
+from pymmcore_plus import CMMCorePlus
 
 # Initialize global core instance
 mmc = CMMCorePlus.instance()

@@ -1,10 +1,9 @@
-from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
-from typing import Optional, Dict, Any
-import traceback
-import time  # Added for time.sleep in set_crisp_state and movement tests
 import os  # For path joining if needed
-import tifffile  # Added for saving images
-import numpy as np  # Added for stacking multi-camera images
+import time  # Added for time.sleep in set_crisp_state and movement tests
+import traceback
+from typing import Any, Dict, Optional
+
+from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
 
 # Initialize global core instance
 # This allows the HardwareInterface to use the same core instance
@@ -203,7 +202,6 @@ class HardwareInterface:
         return "Multi Camera"
 
     # --- Stage Position Control ---
-    # ... (All stage control methods remain the same as before) ...
     def move_xy(self, x: float, y: float, wait: bool = True):
         """Moves the default XY stage. Assumes self.xy_stage is set as default."""
         if mmc.getXYStageDevice() != self.xy_stage:
@@ -439,36 +437,14 @@ class HardwareInterface:
         return None
 
     def set_crisp_state(self, crisp_autofocus_device_label: str, state: str) -> bool:
-        """
-        Sets the state of a CRISP device (e.g., "Lock", "Idle", "Focus", "Find Rng", "Ready").
-        Valid labels: self.crisp_o1_autofocus_device or self.crisp_o3_autofocus_device.
-        """
         if crisp_autofocus_device_label not in mmc.getLoadedDevices():
             print(f"Error: CRISP device '{crisp_autofocus_device_label}' not found.")
             return False
         try:
-            allowed_states = mmc.getAllowedPropertyValues(
-                crisp_autofocus_device_label, "CRISP State"
-            )
-            if state not in allowed_states:
-                print(
-                    f"Error: '{state}' is not an allowed state for {crisp_autofocus_device_label}. Allowed: {allowed_states}"
-                )
-                return False
-
             mmc.setProperty(crisp_autofocus_device_label, "CRISP State", state)
             print(f"Set {crisp_autofocus_device_label} 'CRISP State' to '{state}'")
-
-            if state.lower() in [
-                "lock",
-                "focus",
-                "find rng",
-                "logcal",
-                "gaincal",
-                "dcal",
-                "ready",
-            ]:
-                time.sleep(0.5)
+            if state.lower() == "lock":
+                time.sleep(1)
             return True
         except Exception as e:
             print(f"Error setting CRISP state for {crisp_autofocus_device_label}: {e}")
@@ -476,7 +452,6 @@ class HardwareInterface:
             return False
 
     def get_crisp_state(self, crisp_autofocus_device_label: str) -> Optional[str]:
-        """Gets the current state of a CRISP device."""
         if crisp_autofocus_device_label not in mmc.getLoadedDevices():
             print(f"Error: CRISP device '{crisp_autofocus_device_label}' not found.")
             return None
@@ -494,7 +469,6 @@ class HardwareInterface:
         original_camera = None
         original_exposure = None
         active_camera_label = ""
-        final_image_data = None
 
         try:
             if camera_label:
@@ -514,9 +488,7 @@ class HardwareInterface:
             print(f"Snapping with camera: {active_camera_label}")
 
             if exposure_ms is not None:
-                original_exposure = (
-                    mmc.getExposure()
-                )  # Get exposure of the *active_camera_label*
+                original_exposure = mmc.getExposure()
                 mmc.setExposure(exposure_ms)
                 print(
                     f"Set exposure for {active_camera_label} to {mmc.getExposure()} ms."
@@ -524,58 +496,11 @@ class HardwareInterface:
 
             mmc.snapImage()
             print(f"Snap command completed for {active_camera_label}.")
-
-            if active_camera_label == self.multi_camera:
-                print(
-                    "Multi Camera snap: attempting to get images from channel 0 and 1."
-                )
-                try:
-                    img1 = mmc.getImage(0)  # Channel 0 for first physical camera
-                    print(
-                        f"  Image from channel 0 obtained. Shape: {img1.shape}, dtype: {img1.dtype}"
-                    )
-                    img2 = mmc.getImage(1)  # Channel 1 for second physical camera
-                    print(
-                        f"  Image from channel 1 obtained. Shape: {img2.shape}, dtype: {img2.dtype}"
-                    )
-                    if img1 is not None and img2 is not None:
-                        final_image_data = np.stack(
-                            [img1, img2]
-                        )  # Stack along a new first axis
-                        print(
-                            f"  Stacked multi-camera images. Final shape: {final_image_data.shape}"
-                        )
-                    elif img1 is not None:
-                        print(
-                            "  Warning: Got image from channel 0 but not channel 1. Returning channel 0 image."
-                        )
-                        final_image_data = img1  # Or handle as error
-                    else:  # Neither image was good
-                        print(
-                            "  Error: Failed to get images from individual channels of Multi Camera."
-                        )
-                        final_image_data = None
-                except Exception as e_mc_ch:
-                    print(
-                        f"  Error getting multi-channel images from {self.multi_camera}: {e_mc_ch}"
-                    )
-                    final_image_data = None  # Fallback to trying a generic getImage
-                    if final_image_data is None:  # If channel specific getImage failed
-                        print(
-                            f"  Falling back to generic getImage() for {self.multi_camera}"
-                        )
-                        final_image_data = mmc.getImage()
-
-            else:  # For single physical cameras
-                final_image_data = mmc.getImage()
-
-            if final_image_data is not None:
-                print(
-                    f"Image obtained from {active_camera_label}. Shape: {final_image_data.shape}, dtype: {final_image_data.dtype}"
-                )
-            else:
-                print(f"Failed to obtain image data from {active_camera_label}.")
-            return final_image_data
+            img = mmc.getImage()
+            print(
+                f"Image obtained from {active_camera_label}. Shape: {img.shape if img is not None else 'None'}, dtype: {img.dtype if img is not None else 'None'}"
+            )
+            return img
 
         except RuntimeError as e_rt:
             print(f"!!! RuntimeError snapping with {active_camera_label}: {e_rt} !!!")
@@ -594,15 +519,12 @@ class HardwareInterface:
                 and active_camera_label
             ):
                 try:
-                    # Ensure we are setting exposure back on the correct camera
                     if mmc.getCameraDevice() == active_camera_label:
                         if mmc.getExposure() != original_exposure:
                             mmc.setExposure(original_exposure)
                             print(
                                 f"Restored exposure for {active_camera_label} to {original_exposure} ms."
                             )
-                    # If original_camera was different, exposure restoration might be tricky
-                    # as original_exposure was for active_camera_label.
                 except Exception as e_restore_exp:
                     print(
                         f"Warning: Could not restore exposure for {active_camera_label}: {e_restore_exp}"
@@ -642,87 +564,163 @@ if __name__ == "__main__":
     try:
         hw_interface = HardwareInterface(config_path=cfg_path)
 
-        # --- Testing Camera Snap and Save ---
-        print("\n--- Testing Camera Snaps and Saving ---")
+        print("\n--- Initial Hardware States ---")
+
+        xy_pos = hw_interface.get_xy_position()
+        if xy_pos:
+            print(
+                f"XY Stage ({hw_interface.xy_stage}): X={xy_pos['x']:.2f}, Y={xy_pos['y']:.2f} µm"
+            )
+
+        z_obj_pos = hw_interface.get_z_objective_position()
+        if z_obj_pos is not None:
+            print(
+                f"Main Z Objective ({hw_interface.main_z_objective}): {z_obj_pos:.2f} µm"
+            )
+
+        p_obj_pos = hw_interface.get_p_objective_position()
+        if p_obj_pos is not None:
+            print(
+                f"P Objective Piezo ({hw_interface.crisp_o3_piezo_stage}): {p_obj_pos:.3f} µm"
+            )
+
+        galvo_x_offset = hw_interface.get_galvo_x_offset_degrees()
+        if galvo_x_offset is not None:
+            print(
+                f"Galvo X Offset ({hw_interface.galvo_scanner}): {galvo_x_offset:.4f} degrees"
+            )
+
+        galvo_y_offset = hw_interface.get_galvo_y_offset_degrees()
+        if galvo_y_offset is not None:
+            print(
+                f"Galvo Y Offset ({hw_interface.galvo_scanner}): {galvo_y_offset:.4f} degrees"
+            )
+
+        tilt_pos = hw_interface.get_light_sheet_tilt()
+        if tilt_pos is not None:
+            print(
+                f"Light Sheet Tilt ({hw_interface.light_sheet_tilt}): {tilt_pos:.2f} µm"
+            )
+
+        focus_targets = hw_interface.get_target_focus_positions()
+        o1_target = focus_targets.get("O1_target_focus_um")
+        o3_target = focus_targets.get("O3_target_focus_um")
         print(
-            "IMPORTANT: If running with Napari, ensure napari-micromanager's Live View is OFF."
+            f"CRISP O1 Target Focus ({hw_interface.crisp_o1_focus_stage}): {o1_target if o1_target is not None else 'N/A'} µm"
+        )
+        print(
+            f"CRISP O3 Target Focus ({hw_interface.crisp_o3_piezo_stage}): {o3_target if o3_target is not None else 'N/A'} µm"
         )
 
-        save_dir = "snapped_images"
-        if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-            print(f"Created directory: {save_dir}")
-
-        # Snap and save from Camera-1
-        print(f"\nSnapping with {hw_interface.camera1}...")
-        cam1_image = hw_interface.snap_image(
-            camera_label=hw_interface.camera1, exposure_ms=10
+        crisp1_state = hw_interface.get_crisp_state(
+            hw_interface.crisp_o1_autofocus_device
         )
-        if cam1_image is not None:
+        print(
+            f"CRISP O1 State ({hw_interface.crisp_o1_autofocus_device}): {crisp1_state if crisp1_state is not None else 'N/A'}"
+        )
+        crisp3_state = hw_interface.get_crisp_state(
+            hw_interface.crisp_o3_autofocus_device
+        )
+        print(
+            f"CRISP O3 State ({hw_interface.crisp_o3_autofocus_device}): {crisp3_state if crisp3_state is not None else 'N/A'}"
+        )
+
+        print("\n--- Testing Movements ---")
+
+        # Test Z Objective Movement
+        initial_z = hw_interface.get_z_objective_position()
+        if initial_z is not None:
+            target_z = initial_z + 5.0  # Smaller move for safety
             print(
-                f"  {hw_interface.camera1} snap successful. Image shape: {cam1_image.shape}, dtype: {cam1_image.dtype}"
+                f"\nMoving Main Z Objective from {initial_z:.2f} µm to {target_z:.2f} µm..."
             )
-            file_path1 = os.path.join(save_dir, "camera1_snap.tif")
-            try:
-                tifffile.imwrite(file_path1, cam1_image)
-                print(f"  Image saved to: {file_path1}")
-            except Exception as e_save:
-                print(f"  Error saving image from {hw_interface.camera1}: {e_save}")
+            hw_interface.move_z_objective(target_z)
+            time.sleep(1)
+            current_z = hw_interface.get_z_objective_position()
+            print(f"Main Z Objective position after move: {current_z:.2f} µm")
+
+            print(f"Moving Main Z Objective back to {initial_z:.2f} µm...")
+            hw_interface.move_z_objective(initial_z)
+            time.sleep(1)
+            current_z = hw_interface.get_z_objective_position()
+            print(f"Main Z Objective position after moving back: {current_z:.2f} µm")
         else:
-            print(f"  Failed to snap image with {hw_interface.camera1}")
-        time.sleep(0.5)
+            print("\nCould not get initial Z objective position, skipping Z move test.")
 
-        # Snap and save from Camera-2
-        print(f"\nSnapping with {hw_interface.camera2}...")
-        cam2_image = hw_interface.snap_image(
-            camera_label=hw_interface.camera2, exposure_ms=10
-        )
-        if cam2_image is not None:
+        # Test XY Stage Movement
+        initial_xy = hw_interface.get_xy_position()
+        if initial_xy:
+            target_x = initial_xy["x"] + 50.0  # Smaller move for safety
+            target_y = initial_xy["y"] - 50.0
             print(
-                f"  {hw_interface.camera2} snap successful. Image shape: {cam2_image.shape}, dtype: {cam2_image.dtype}"
+                f"\nMoving XY Stage from ({initial_xy['x']:.2f}, {initial_xy['y']:.2f}) µm to ({target_x:.2f}, {target_y:.2f}) µm..."
             )
-            file_path2 = os.path.join(save_dir, "camera2_snap.tif")
-            try:
-                tifffile.imwrite(file_path2, cam2_image)
-                print(f"  Image saved to: {file_path2}")
-            except Exception as e_save:
-                print(f"  Error saving image from {hw_interface.camera2}: {e_save}")
-        else:
-            print(f"  Failed to snap image with {hw_interface.camera2}")
-        time.sleep(0.5)
-
-        # Snap and save from Multi Camera
-        print(f"\nSnapping with {hw_interface.multi_camera}...")
-        multi_cam_image = hw_interface.snap_image(
-            camera_label=hw_interface.multi_camera, exposure_ms=10
-        )
-        if multi_cam_image is not None:
-            print(
-                f"  {hw_interface.multi_camera} snap successful. Image shape: {multi_cam_image.shape}, dtype: {multi_cam_image.dtype}"
-            )
-            file_path_multi = os.path.join(save_dir, "multi_camera_snap.tif")
-            try:
-                tifffile.imwrite(file_path_multi, multi_cam_image)
-                print(f"  Image saved to: {file_path_multi}")
-            except Exception as e_save:
+            hw_interface.move_xy(target_x, target_y)
+            time.sleep(2)  # Longer wait for XY potentially
+            current_xy = hw_interface.get_xy_position()
+            if current_xy:
                 print(
-                    f"  Error saving image from {hw_interface.multi_camera}: {e_save}"
+                    f"XY Stage position after move: X={current_xy['x']:.2f}, Y={current_xy['y']:.2f} µm"
                 )
 
-            if multi_cam_image.ndim == 2:
-                print("    Multi Camera returned a 2D image.")
-            elif multi_cam_image.ndim == 3 and multi_cam_image.shape[0] == 2:
+            print(
+                f"Moving XY Stage back to ({initial_xy['x']:.2f}, {initial_xy['y']:.2f}) µm..."
+            )
+            hw_interface.move_xy(initial_xy["x"], initial_xy["y"])
+            time.sleep(2)
+            current_xy = hw_interface.get_xy_position()
+            if current_xy:
                 print(
-                    "    Multi Camera returned a stack of 2 images. Saved as a multi-page TIFF."
-                )
-            elif multi_cam_image.ndim == 3:  # General 3D case
-                print(
-                    f"    Multi Camera returned a 3D image with {multi_cam_image.shape[0]} planes. Saved as a multi-page TIFF."
+                    f"XY Stage position after moving back: X={current_xy['x']:.2f}, Y={current_xy['y']:.2f} µm"
                 )
         else:
-            print(f"  Failed to snap image with {hw_interface.multi_camera}")
+            print("\nCould not get initial XY stage position, skipping XY move test.")
 
-        print("\n--- End of Camera Snap and Save Tests ---")
+        # Test P Objective Piezo Movement
+        initial_p_piezo = hw_interface.get_p_objective_position()
+        if initial_p_piezo is not None:
+            target_p_piezo = initial_p_piezo + 1.0  # Small piezo move (e.g., 1 µm)
+            print(
+                f"\nMoving P Objective Piezo from {initial_p_piezo:.3f} µm to {target_p_piezo:.3f} µm..."
+            )
+            hw_interface.set_p_objective_position(target_p_piezo)
+            time.sleep(0.5)  # Piezo is usually fast
+            current_p_piezo = hw_interface.get_p_objective_position()
+            print(f"P Objective Piezo position after move: {current_p_piezo:.3f} µm")
+
+            print(f"Moving P Objective Piezo back to {initial_p_piezo:.3f} µm...")
+            hw_interface.set_p_objective_position(initial_p_piezo)
+            time.sleep(0.5)
+            current_p_piezo = hw_interface.get_p_objective_position()
+            print(
+                f"P Objective Piezo position after moving back: {current_p_piezo:.3f} µm"
+            )
+        else:
+            print(
+                "\nCould not get initial P Objective Piezo position, skipping its move test."
+            )
+
+        # Test Galvo X Offset Setting
+        initial_galvo_x = hw_interface.get_galvo_x_offset_degrees()
+        if initial_galvo_x is not None:
+            target_galvo_x = initial_galvo_x + 0.01  # Small degree change
+            print(
+                f"\nSetting Galvo X Offset from {initial_galvo_x:.4f} deg to {target_galvo_x:.4f} deg..."
+            )
+            hw_interface.set_galvo_x_offset_degrees(target_galvo_x)
+            time.sleep(0.2)  # Galvos are usually fast
+            current_galvo_x = hw_interface.get_galvo_x_offset_degrees()
+            print(f"Galvo X Offset after set: {current_galvo_x:.4f} deg")
+
+            print(f"Setting Galvo X Offset back to {initial_galvo_x:.4f} deg...")
+            hw_interface.set_galvo_x_offset_degrees(initial_galvo_x)
+            time.sleep(0.2)
+            current_galvo_x = hw_interface.get_galvo_x_offset_degrees()
+            print(f"Galvo X Offset after setting back: {current_galvo_x:.4f} deg")
+        else:
+            print("\nCould not get initial Galvo X Offset, skipping its set test.")
+
+        print("\n--- End of Movement Tests ---")
 
     except FileNotFoundError as e:
         print(f"Initialization failed due to missing or unconfirmed configuration: {e}")

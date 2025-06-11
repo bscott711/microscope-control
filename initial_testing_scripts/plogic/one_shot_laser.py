@@ -1,11 +1,11 @@
 import os
 import time
-import traceback
 import tkinter as tk
+import traceback
 from dataclasses import dataclass
 from datetime import datetime
 from tkinter import filedialog, ttk
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
 import tifffile
@@ -245,7 +245,7 @@ class HardwareInterface:
         return HW.camera_a_label
 
     def find_and_set_trigger_mode(
-        self, camera_label: str, desired_modes: List[str]
+        self, camera_label: str, desired_modes: list[str]
     ) -> bool:
         if camera_label not in mmc.getLoadedDevices():
             return False
@@ -545,7 +545,8 @@ class AcquisitionGUI:
                 self.images_popped_this_volume += 1
                 self.status_var.set(
                     f"Time Point {self.current_time_point}/{self.time_points_total} | "
-                    f"Slice {self.images_popped_this_volume}/{self.images_expected_per_volume}"
+                    f"Slice {self.images_popped_this_volume}/"
+                    f"{self.images_expected_per_volume}"
                 )
                 img_array = self._process_tagged_image(tagged_img)
                 if self.should_save_var.get():
@@ -604,7 +605,8 @@ class AcquisitionGUI:
     def _finish_volume(self):
         volume_duration = time.monotonic() - self.volume_start_time
         print(
-            f"Volume {self.current_time_point} acquired in {volume_duration:.2f} seconds."
+            f"Volume {self.current_time_point} acquired in "
+            f"{volume_duration:.2f} seconds."
         )
         self._save_current_volume()
         _reset_for_next_volume()

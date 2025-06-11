@@ -1,7 +1,8 @@
-import time
-from typing import Optional, List
 import os
+import time
 import traceback
+from typing import List, Optional
+
 from pymmcore_plus import CMMCorePlus
 
 # Initialize global core instance

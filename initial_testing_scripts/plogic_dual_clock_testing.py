@@ -1,7 +1,8 @@
-from pymmcore_plus import CMMCorePlus
-import time
 import os
+import time
 import traceback
+
+from pymmcore_plus import CMMCorePlus
 
 # Initialize global core instance
 mmc = CMMCorePlus.instance()

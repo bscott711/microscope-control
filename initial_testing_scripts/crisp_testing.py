@@ -1,8 +1,9 @@
-from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
-from typing import Optional, Dict, Tuple, Any
-import traceback
-import time  # Added for time.sleep in set_crisp_state
 import os  # For path joining if needed
+import time  # Added for time.sleep in set_crisp_state and movement tests
+import traceback
+from typing import Any, Dict, Optional
+
+from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
 
 # Initialize global core instance
 # This allows the HardwareInterface to use the same core instance
@@ -218,7 +219,7 @@ class HardwareInterface:
             mmc.setXYPosition(x, y)
             if wait:
                 mmc.waitForDevice(self.xy_stage)
-            print(f"Moved XY to ({x}, {y})")
+            print(f"Moved XY to ({x:.2f}, {y:.2f})")  # Added formatting
         except Exception as e:
             print(f"Error moving XY stage: {e}")
             traceback.print_exc()
@@ -254,7 +255,7 @@ class HardwareInterface:
             mmc.setPosition(self.main_z_objective, z_um)
             if wait:
                 mmc.waitForDevice(self.main_z_objective)
-            print(f"Moved Main Z Objective to {z_um} µm")
+            print(f"Moved Main Z Objective to {z_um:.2f} µm")  # Added formatting
         except Exception as e:
             print(f"Error moving Main Z Objective: {e}")
             traceback.print_exc()
@@ -270,9 +271,7 @@ class HardwareInterface:
             traceback.print_exc()
             return None
 
-    def set_p_objective_position(
-        self, position_um: float, wait: bool = True
-    ):  # New method
+    def set_p_objective_position(self, position_um: float, wait: bool = True):
         """Sets the position of the P objective piezo stage (PiezoStage:P:34)."""
         if self.crisp_o3_piezo_stage not in mmc.getLoadedDevices():
             print(
@@ -283,12 +282,14 @@ class HardwareInterface:
             mmc.setPosition(self.crisp_o3_piezo_stage, position_um)
             if wait:
                 mmc.waitForDevice(self.crisp_o3_piezo_stage)
-            print(f"Moved P Objective Piezo to {position_um} µm")
+            print(
+                f"Moved P Objective Piezo to {position_um:.3f} µm"
+            )  # Added formatting
         except Exception as e:
             print(f"Error moving P Objective Piezo: {e}")
             traceback.print_exc()
 
-    def get_p_objective_position(self) -> Optional[float]:  # New method
+    def get_p_objective_position(self) -> Optional[float]:
         """Gets the position of the P objective piezo stage (PiezoStage:P:34)."""
         if self.crisp_o3_piezo_stage not in mmc.getLoadedDevices():
             print(
@@ -354,7 +355,9 @@ class HardwareInterface:
                 return
 
             mmc.setProperty(self.galvo_scanner, property_name, float(value))
-            print(f"Set Galvo property '{property_name}' to {value}")
+            print(
+                f"Set Galvo property '{property_name}' to {value:.4f}"
+            )  # Added formatting
         except Exception as e:
             print(f"Error setting galvo property '{property_name}': {e}")
             traceback.print_exc()
@@ -379,7 +382,7 @@ class HardwareInterface:
             mmc.setPosition(self.light_sheet_tilt, tilt_um)
             if wait:
                 mmc.waitForDevice(self.light_sheet_tilt)
-            print(f"Moved Light Sheet Tilt to {tilt_um} µm")
+            print(f"Moved Light Sheet Tilt to {tilt_um:.2f} µm")  # Added formatting
         except Exception as e:
             print(f"Error moving Light Sheet Tilt: {e}")
             traceback.print_exc()
@@ -407,16 +410,13 @@ class HardwareInterface:
             if wait:
                 mmc.waitForDevice(self.crisp_o1_focus_stage)
             print(
-                f"Moved CRISP O1 target focus (stage {self.crisp_o1_focus_stage}) to {z_um} µm"
+                f"Moved CRISP O1 target focus (stage {self.crisp_o1_focus_stage}) to {z_um:.2f} µm"
             )
         except Exception as e:
             print(f"Error moving CRISP O1 target focus: {e}")
             traceback.print_exc()
 
     def move_crisp_o3_target_focus(self, piezo_um: float, wait: bool = True):
-        # This method now effectively becomes an alias for set_p_objective_position
-        # if crisp_o3_piezo_stage is the P:34 device.
-        # Keeping it for conceptual clarity if CRISP target is thought of separately.
         print(
             f"Note: move_crisp_o3_target_focus calls set_p_objective_position for stage '{self.crisp_o3_piezo_stage}'."
         )
@@ -425,7 +425,7 @@ class HardwareInterface:
     def get_target_focus_positions(self) -> Dict[str, Optional[float]]:
         return {
             "O1_target_focus_um": self.get_position_safe(self.crisp_o1_focus_stage),
-            "O3_target_focus_um": self.get_p_objective_position(),  # Use the new getter
+            "O3_target_focus_um": self.get_p_objective_position(),
         }
 
     def get_position_safe(self, device_label: str) -> Optional[float]:
@@ -437,14 +437,40 @@ class HardwareInterface:
         return None
 
     def set_crisp_state(self, crisp_autofocus_device_label: str, state: str) -> bool:
+        """
+        Sets the state of a CRISP device (e.g., "Lock", "Idle", "Focus", "Find Rng", "Ready").
+        Valid labels: self.crisp_o1_autofocus_device or self.crisp_o3_autofocus_device.
+        """
         if crisp_autofocus_device_label not in mmc.getLoadedDevices():
             print(f"Error: CRISP device '{crisp_autofocus_device_label}' not found.")
             return False
         try:
+            # The property name for CRISP state is "CRISP State"
+            # Ensure the 'state' string is one of the allowed values for the device.
+            allowed_states = mmc.getAllowedPropertyValues(
+                crisp_autofocus_device_label, "CRISP State"
+            )
+            if state not in allowed_states:
+                print(
+                    f"Error: '{state}' is not an allowed state for {crisp_autofocus_device_label}. Allowed: {allowed_states}"
+                )
+                return False
+
             mmc.setProperty(crisp_autofocus_device_label, "CRISP State", state)
             print(f"Set {crisp_autofocus_device_label} 'CRISP State' to '{state}'")
-            if state.lower() == "lock":
-                time.sleep(1)
+
+            # Add a small delay if moving to an active state like "Focus", "Ready", or "Lock"
+            # to allow the system to react or the LED to turn on.
+            if state.lower() in [
+                "lock",
+                "focus",
+                "find rng",
+                "logcal",
+                "gaincal",
+                "dcal",
+                "ready",
+            ]:  # Added "ready"
+                time.sleep(0.5)  # Adjust delay as needed
             return True
         except Exception as e:
             print(f"Error setting CRISP state for {crisp_autofocus_device_label}: {e}")
@@ -452,6 +478,7 @@ class HardwareInterface:
             return False
 
     def get_crisp_state(self, crisp_autofocus_device_label: str) -> Optional[str]:
+        """Gets the current state of a CRISP device."""
         if crisp_autofocus_device_label not in mmc.getLoadedDevices():
             print(f"Error: CRISP device '{crisp_autofocus_device_label}' not found.")
             return None
@@ -561,96 +588,137 @@ if __name__ == "__main__":
     cfg_path = "hardware_profiles/20250523-OPM.cfg"
 
     hw_interface = None
+    # Define state trackers for finally block
+    crisp1_state_changed_to_ready = False
+    crisp3_state_changed_to_ready = False
+
     try:
         hw_interface = HardwareInterface(config_path=cfg_path)
 
-        print("\n--- Initial Hardware States ---")
-
-        xy_pos = hw_interface.get_xy_position()
-        if xy_pos:
-            print(
-                f"XY Stage ({hw_interface.xy_stage}): X={xy_pos['x']:.2f}, Y={xy_pos['y']:.2f} µm"
-            )
-        else:
-            print(f"XY Stage ({hw_interface.xy_stage}): Could not get position.")
-
-        z_obj_pos = hw_interface.get_z_objective_position()
-        if z_obj_pos is not None:
-            print(
-                f"Main Z Objective ({hw_interface.main_z_objective}): {z_obj_pos:.2f} µm"
-            )
-        else:
-            print(
-                f"Main Z Objective ({hw_interface.main_z_objective}): Could not get position."
-            )
-
-        # P Objective (Piezo) Position
-        p_obj_pos = hw_interface.get_p_objective_position()  # New call
-        if p_obj_pos is not None:
-            print(
-                f"P Objective Piezo ({hw_interface.crisp_o3_piezo_stage}): {p_obj_pos:.3f} µm"
-            )  # Using .3f for piezo
-        else:
-            print(
-                f"P Objective Piezo ({hw_interface.crisp_o3_piezo_stage}): Could not get position."
-            )
-
-        galvo_x_offset = hw_interface.get_galvo_x_offset_degrees()
-        if galvo_x_offset is not None:
-            print(
-                f"Galvo X Offset ({hw_interface.galvo_scanner}): {galvo_x_offset:.4f} degrees"
-            )
-        else:
-            print(
-                f"Galvo X Offset ({hw_interface.galvo_scanner}): Could not get position."
-            )
-
-        galvo_y_offset = hw_interface.get_galvo_y_offset_degrees()
-        if galvo_y_offset is not None:
-            print(
-                f"Galvo Y Offset ({hw_interface.galvo_scanner}): {galvo_y_offset:.4f} degrees"
-            )
-        else:
-            print(
-                f"Galvo Y Offset ({hw_interface.galvo_scanner}): Could not get position."
-            )
-
-        tilt_pos = hw_interface.get_light_sheet_tilt()
-        if tilt_pos is not None:
-            print(
-                f"Light Sheet Tilt ({hw_interface.light_sheet_tilt}): {tilt_pos:.2f} µm"
-            )
-        else:
-            print(
-                f"Light Sheet Tilt ({hw_interface.light_sheet_tilt}): Could not get position."
-            )
-
-        focus_targets = hw_interface.get_target_focus_positions()
-        o1_target = focus_targets.get("O1_target_focus_um")
-        o3_target = focus_targets.get(
-            "O3_target_focus_um"
-        )  # This now uses get_p_objective_position
-        print(
-            f"CRISP O1 Target Focus ({hw_interface.crisp_o1_focus_stage}): {o1_target if o1_target is not None else 'N/A'} µm"
-        )
-        print(
-            f"CRISP O3 Target Focus ({hw_interface.crisp_o3_piezo_stage}): {o3_target if o3_target is not None else 'N/A'} µm"
-        )
-
-        crisp1_state = hw_interface.get_crisp_state(
+        print("\n--- Initial Hardware States (before CRISP test) ---")
+        crisp1_initial_state = hw_interface.get_crisp_state(
             hw_interface.crisp_o1_autofocus_device
         )
         print(
-            f"CRISP O1 State ({hw_interface.crisp_o1_autofocus_device}): {crisp1_state if crisp1_state is not None else 'N/A'}"
+            f"CRISP O1 Initial State ({hw_interface.crisp_o1_autofocus_device}): {crisp1_initial_state if crisp1_initial_state is not None else 'N/A'}"
         )
-        crisp3_state = hw_interface.get_crisp_state(
+
+        crisp3_initial_state = hw_interface.get_crisp_state(
             hw_interface.crisp_o3_autofocus_device
         )
         print(
-            f"CRISP O3 State ({hw_interface.crisp_o3_autofocus_device}): {crisp3_state if crisp3_state is not None else 'N/A'}"
+            f"CRISP O3 Initial State ({hw_interface.crisp_o3_autofocus_device}): {crisp3_initial_state if crisp3_initial_state is not None else 'N/A'}"
         )
 
-        print("\n--- End of Hardware State Report ---")
+        target_crisp_state = "Ready"  # Target state for testing
+
+        # --- Test CRISP O1 ---
+        print(
+            f"\n--- Testing CRISP State Changes ({hw_interface.crisp_o1_autofocus_device}) ---"
+        )
+        if crisp1_initial_state == "Idle":
+            print(
+                f"Attempting to set {hw_interface.crisp_o1_autofocus_device} to '{target_crisp_state}'..."
+            )
+            if hw_interface.set_crisp_state(
+                hw_interface.crisp_o1_autofocus_device, target_crisp_state
+            ):
+                crisp1_state_changed_to_ready = True  # Mark that we changed it
+                time.sleep(1)  # Allow time for state change
+                current_state = hw_interface.get_crisp_state(
+                    hw_interface.crisp_o1_autofocus_device
+                )
+                print(f"State after setting to '{target_crisp_state}': {current_state}")
+
+                if current_state == target_crisp_state:
+                    print(
+                        f"Attempting to set {hw_interface.crisp_o1_autofocus_device} back to 'Idle'..."
+                    )
+                    if hw_interface.set_crisp_state(
+                        hw_interface.crisp_o1_autofocus_device, "Idle"
+                    ):
+                        crisp1_state_changed_to_ready = (
+                            False  # Successfully returned to Idle
+                        )
+                        time.sleep(0.5)
+                        print(
+                            f"State after setting back to 'Idle': {hw_interface.get_crisp_state(hw_interface.crisp_o1_autofocus_device)}"
+                        )
+                    else:
+                        print(
+                            f"Failed to set {hw_interface.crisp_o1_autofocus_device} back to 'Idle'."
+                        )
+                elif current_state is not None:
+                    print(
+                        f"Warning: {hw_interface.crisp_o1_autofocus_device} state is '{current_state}' after attempting to set to '{target_crisp_state}'."
+                    )
+            else:
+                print(
+                    f"Failed to set {hw_interface.crisp_o1_autofocus_device} to '{target_crisp_state}'."
+                )
+        elif crisp1_initial_state is None:
+            print(
+                f"Could not get initial state for {hw_interface.crisp_o1_autofocus_device}, skipping its state change test."
+            )
+        else:
+            print(
+                f"{hw_interface.crisp_o1_autofocus_device} initial state is '{crisp1_initial_state}', not 'Idle'. Skipping '{target_crisp_state}' -> 'Idle' test sequence."
+            )
+
+        # --- Test CRISP O3 ---
+        print(
+            f"\n--- Testing CRISP State Changes ({hw_interface.crisp_o3_autofocus_device}) ---"
+        )
+        if crisp3_initial_state == "Idle":
+            print(
+                f"Attempting to set {hw_interface.crisp_o3_autofocus_device} to '{target_crisp_state}'..."
+            )
+            if hw_interface.set_crisp_state(
+                hw_interface.crisp_o3_autofocus_device, target_crisp_state
+            ):
+                crisp3_state_changed_to_ready = True  # Mark that we changed it
+                time.sleep(1)
+                current_state = hw_interface.get_crisp_state(
+                    hw_interface.crisp_o3_autofocus_device
+                )
+                print(f"State after setting to '{target_crisp_state}': {current_state}")
+
+                if current_state == target_crisp_state:
+                    print(
+                        f"Attempting to set {hw_interface.crisp_o3_autofocus_device} back to 'Idle'..."
+                    )
+                    if hw_interface.set_crisp_state(
+                        hw_interface.crisp_o3_autofocus_device, "Idle"
+                    ):
+                        crisp3_state_changed_to_ready = (
+                            False  # Successfully returned to Idle
+                        )
+                        time.sleep(0.5)
+                        print(
+                            f"State after setting back to 'Idle': {hw_interface.get_crisp_state(hw_interface.crisp_o3_autofocus_device)}"
+                        )
+                    else:
+                        print(
+                            f"Failed to set {hw_interface.crisp_o3_autofocus_device} back to 'Idle'."
+                        )
+                elif current_state is not None:
+                    print(
+                        f"Warning: {hw_interface.crisp_o3_autofocus_device} state is '{current_state}' after attempting to set to '{target_crisp_state}'."
+                    )
+            else:
+                print(
+                    f"Failed to set {hw_interface.crisp_o3_autofocus_device} to '{target_crisp_state}'."
+                )
+        elif crisp3_initial_state is None:
+            print(
+                f"Could not get initial state for {hw_interface.crisp_o3_autofocus_device}, skipping its state change test."
+            )
+        else:
+            print(
+                f"{hw_interface.crisp_o3_autofocus_device} initial state is '{crisp3_initial_state}', not 'Idle'. Skipping '{target_crisp_state}' -> 'Idle' test sequence."
+            )
+
+        print("\n--- End of CRISP Tests ---")
 
     except FileNotFoundError as e:
         print(f"Initialization failed due to missing or unconfirmed configuration: {e}")
@@ -659,6 +727,33 @@ if __name__ == "__main__":
         traceback.print_exc()
     finally:
         if hw_interface:
+            # Ensure CRISP devices are set back to Idle if their state might have been changed
+            if (
+                crisp1_state_changed_to_ready
+            ):  # If it was successfully changed to Ready and not back to Idle
+                print(
+                    f"\nEnsuring {hw_interface.crisp_o1_autofocus_device} is returned to Idle state in finally block..."
+                )
+                hw_interface.set_crisp_state(
+                    hw_interface.crisp_o1_autofocus_device, "Idle"
+                )
+                print(
+                    f"Final {hw_interface.crisp_o1_autofocus_device} State: {hw_interface.get_crisp_state(hw_interface.crisp_o1_autofocus_device)}"
+                )
+
+            if (
+                crisp3_state_changed_to_ready
+            ):  # If it was successfully changed to Ready and not back to Idle
+                print(
+                    f"\nEnsuring {hw_interface.crisp_o3_autofocus_device} is returned to Idle state in finally block..."
+                )
+                hw_interface.set_crisp_state(
+                    hw_interface.crisp_o3_autofocus_device, "Idle"
+                )
+                print(
+                    f"Final {hw_interface.crisp_o3_autofocus_device} State: {hw_interface.get_crisp_state(hw_interface.crisp_o3_autofocus_device)}"
+                )
+
             print(
                 "\nDiagnostic test finished. Hardware not automatically shut down in this example."
             )

@@ -1,8 +1,11 @@
-from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
-from typing import Optional, Dict, Tuple, Any
-import traceback
-import time  # Added for time.sleep in set_crisp_state and movement tests
 import os  # For path joining if needed
+import time  # Added for time.sleep in set_crisp_state and movement tests
+import traceback
+from typing import Any, Dict, Optional
+
+import numpy as np  # Added for stacking multi-camera images
+import tifffile  # Added for saving images
+from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
 
 # Initialize global core instance
 # This allows the HardwareInterface to use the same core instance
@@ -201,6 +204,7 @@ class HardwareInterface:
         return "Multi Camera"
 
     # --- Stage Position Control ---
+    # ... (All stage control methods remain the same as before) ...
     def move_xy(self, x: float, y: float, wait: bool = True):
         """Moves the default XY stage. Assumes self.xy_stage is set as default."""
         if mmc.getXYStageDevice() != self.xy_stage:
@@ -444,8 +448,6 @@ class HardwareInterface:
             print(f"Error: CRISP device '{crisp_autofocus_device_label}' not found.")
             return False
         try:
-            # The property name for CRISP state is "CRISP State"
-            # Ensure the 'state' string is one of the allowed values for the device.
             allowed_states = mmc.getAllowedPropertyValues(
                 crisp_autofocus_device_label, "CRISP State"
             )
@@ -458,8 +460,6 @@ class HardwareInterface:
             mmc.setProperty(crisp_autofocus_device_label, "CRISP State", state)
             print(f"Set {crisp_autofocus_device_label} 'CRISP State' to '{state}'")
 
-            # Add a small delay if moving to an active state like "Focus", "Ready", or "Lock"
-            # to allow the system to react or the LED to turn on.
             if state.lower() in [
                 "lock",
                 "focus",
@@ -468,8 +468,8 @@ class HardwareInterface:
                 "gaincal",
                 "dcal",
                 "ready",
-            ]:  # Added "ready"
-                time.sleep(0.5)  # Adjust delay as needed
+            ]:
+                time.sleep(0.5)
             return True
         except Exception as e:
             print(f"Error setting CRISP state for {crisp_autofocus_device_label}: {e}")
@@ -495,6 +495,7 @@ class HardwareInterface:
         original_camera = None
         original_exposure = None
         active_camera_label = ""
+        final_image_data = None
 
         try:
             if camera_label:
@@ -514,7 +515,9 @@ class HardwareInterface:
             print(f"Snapping with camera: {active_camera_label}")
 
             if exposure_ms is not None:
-                original_exposure = mmc.getExposure()
+                original_exposure = (
+                    mmc.getExposure()
+                )  # Get exposure of the *active_camera_label*
                 mmc.setExposure(exposure_ms)
                 print(
                     f"Set exposure for {active_camera_label} to {mmc.getExposure()} ms."
@@ -522,11 +525,58 @@ class HardwareInterface:
 
             mmc.snapImage()
             print(f"Snap command completed for {active_camera_label}.")
-            img = mmc.getImage()
-            print(
-                f"Image obtained from {active_camera_label}. Shape: {img.shape if img is not None else 'None'}, dtype: {img.dtype if img is not None else 'None'}"
-            )
-            return img
+
+            if active_camera_label == self.multi_camera:
+                print(
+                    "Multi Camera snap: attempting to get images from channel 0 and 1."
+                )
+                try:
+                    img1 = mmc.getImage(0)  # Channel 0 for first physical camera
+                    print(
+                        f"  Image from channel 0 obtained. Shape: {img1.shape}, dtype: {img1.dtype}"
+                    )
+                    img2 = mmc.getImage(1)  # Channel 1 for second physical camera
+                    print(
+                        f"  Image from channel 1 obtained. Shape: {img2.shape}, dtype: {img2.dtype}"
+                    )
+                    if img1 is not None and img2 is not None:
+                        final_image_data = np.stack(
+                            [img1, img2]
+                        )  # Stack along a new first axis
+                        print(
+                            f"  Stacked multi-camera images. Final shape: {final_image_data.shape}"
+                        )
+                    elif img1 is not None:
+                        print(
+                            "  Warning: Got image from channel 0 but not channel 1. Returning channel 0 image."
+                        )
+                        final_image_data = img1  # Or handle as error
+                    else:  # Neither image was good
+                        print(
+                            "  Error: Failed to get images from individual channels of Multi Camera."
+                        )
+                        final_image_data = None
+                except Exception as e_mc_ch:
+                    print(
+                        f"  Error getting multi-channel images from {self.multi_camera}: {e_mc_ch}"
+                    )
+                    final_image_data = None  # Fallback to trying a generic getImage
+                    if final_image_data is None:  # If channel specific getImage failed
+                        print(
+                            f"  Falling back to generic getImage() for {self.multi_camera}"
+                        )
+                        final_image_data = mmc.getImage()
+
+            else:  # For single physical cameras
+                final_image_data = mmc.getImage()
+
+            if final_image_data is not None:
+                print(
+                    f"Image obtained from {active_camera_label}. Shape: {final_image_data.shape}, dtype: {final_image_data.dtype}"
+                )
+            else:
+                print(f"Failed to obtain image data from {active_camera_label}.")
+            return final_image_data
 
         except RuntimeError as e_rt:
             print(f"!!! RuntimeError snapping with {active_camera_label}: {e_rt} !!!")
@@ -545,12 +595,15 @@ class HardwareInterface:
                 and active_camera_label
             ):
                 try:
+                    # Ensure we are setting exposure back on the correct camera
                     if mmc.getCameraDevice() == active_camera_label:
                         if mmc.getExposure() != original_exposure:
                             mmc.setExposure(original_exposure)
                             print(
                                 f"Restored exposure for {active_camera_label} to {original_exposure} ms."
                             )
+                    # If original_camera was different, exposure restoration might be tricky
+                    # as original_exposure was for active_camera_label.
                 except Exception as e_restore_exp:
                     print(
                         f"Warning: Could not restore exposure for {active_camera_label}: {e_restore_exp}"
@@ -587,137 +640,90 @@ if __name__ == "__main__":
     cfg_path = "hardware_profiles/20250523-OPM.cfg"
 
     hw_interface = None
-    # Define state trackers for finally block
-    crisp1_state_changed_to_ready = False
-    crisp3_state_changed_to_ready = False
-
     try:
         hw_interface = HardwareInterface(config_path=cfg_path)
 
-        print("\n--- Initial Hardware States (before CRISP test) ---")
-        crisp1_initial_state = hw_interface.get_crisp_state(
-            hw_interface.crisp_o1_autofocus_device
-        )
+        # --- Testing Camera Snap and Save ---
+        print("\n--- Testing Camera Snaps and Saving ---")
         print(
-            f"CRISP O1 Initial State ({hw_interface.crisp_o1_autofocus_device}): {crisp1_initial_state if crisp1_initial_state is not None else 'N/A'}"
+            "IMPORTANT: If running with Napari, ensure napari-micromanager's Live View is OFF."
         )
 
-        crisp3_initial_state = hw_interface.get_crisp_state(
-            hw_interface.crisp_o3_autofocus_device
-        )
-        print(
-            f"CRISP O3 Initial State ({hw_interface.crisp_o3_autofocus_device}): {crisp3_initial_state if crisp3_initial_state is not None else 'N/A'}"
-        )
+        save_dir = "snapped_images"
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+            print(f"Created directory: {save_dir}")
 
-        target_crisp_state = "Ready"  # Target state for testing
-
-        # --- Test CRISP O1 ---
-        print(
-            f"\n--- Testing CRISP State Changes ({hw_interface.crisp_o1_autofocus_device}) ---"
+        # Snap and save from Camera-1
+        print(f"\nSnapping with {hw_interface.camera1}...")
+        cam1_image = hw_interface.snap_image(
+            camera_label=hw_interface.camera1, exposure_ms=10
         )
-        if crisp1_initial_state == "Idle":
+        if cam1_image is not None:
             print(
-                f"Attempting to set {hw_interface.crisp_o1_autofocus_device} to '{target_crisp_state}'..."
+                f"  {hw_interface.camera1} snap successful. Image shape: {cam1_image.shape}, dtype: {cam1_image.dtype}"
             )
-            if hw_interface.set_crisp_state(
-                hw_interface.crisp_o1_autofocus_device, target_crisp_state
-            ):
-                crisp1_state_changed_to_ready = True  # Mark that we changed it
-                time.sleep(1)  # Allow time for state change
-                current_state = hw_interface.get_crisp_state(
-                    hw_interface.crisp_o1_autofocus_device
-                )
-                print(f"State after setting to '{target_crisp_state}': {current_state}")
-
-                if current_state == target_crisp_state:
-                    print(
-                        f"Attempting to set {hw_interface.crisp_o1_autofocus_device} back to 'Idle'..."
-                    )
-                    if hw_interface.set_crisp_state(
-                        hw_interface.crisp_o1_autofocus_device, "Idle"
-                    ):
-                        crisp1_state_changed_to_ready = (
-                            False  # Successfully returned to Idle
-                        )
-                        time.sleep(0.5)
-                        print(
-                            f"State after setting back to 'Idle': {hw_interface.get_crisp_state(hw_interface.crisp_o1_autofocus_device)}"
-                        )
-                    else:
-                        print(
-                            f"Failed to set {hw_interface.crisp_o1_autofocus_device} back to 'Idle'."
-                        )
-                elif current_state is not None:
-                    print(
-                        f"Warning: {hw_interface.crisp_o1_autofocus_device} state is '{current_state}' after attempting to set to '{target_crisp_state}'."
-                    )
-            else:
-                print(
-                    f"Failed to set {hw_interface.crisp_o1_autofocus_device} to '{target_crisp_state}'."
-                )
-        elif crisp1_initial_state is None:
-            print(
-                f"Could not get initial state for {hw_interface.crisp_o1_autofocus_device}, skipping its state change test."
-            )
+            file_path1 = os.path.join(save_dir, "camera1_snap.tif")
+            try:
+                tifffile.imwrite(file_path1, cam1_image)
+                print(f"  Image saved to: {file_path1}")
+            except Exception as e_save:
+                print(f"  Error saving image from {hw_interface.camera1}: {e_save}")
         else:
-            print(
-                f"{hw_interface.crisp_o1_autofocus_device} initial state is '{crisp1_initial_state}', not 'Idle'. Skipping '{target_crisp_state}' -> 'Idle' test sequence."
-            )
+            print(f"  Failed to snap image with {hw_interface.camera1}")
+        time.sleep(0.5)
 
-        # --- Test CRISP O3 ---
-        print(
-            f"\n--- Testing CRISP State Changes ({hw_interface.crisp_o3_autofocus_device}) ---"
+        # Snap and save from Camera-2
+        print(f"\nSnapping with {hw_interface.camera2}...")
+        cam2_image = hw_interface.snap_image(
+            camera_label=hw_interface.camera2, exposure_ms=10
         )
-        if crisp3_initial_state == "Idle":
+        if cam2_image is not None:
             print(
-                f"Attempting to set {hw_interface.crisp_o3_autofocus_device} to '{target_crisp_state}'..."
+                f"  {hw_interface.camera2} snap successful. Image shape: {cam2_image.shape}, dtype: {cam2_image.dtype}"
             )
-            if hw_interface.set_crisp_state(
-                hw_interface.crisp_o3_autofocus_device, target_crisp_state
-            ):
-                crisp3_state_changed_to_ready = True  # Mark that we changed it
-                time.sleep(1)
-                current_state = hw_interface.get_crisp_state(
-                    hw_interface.crisp_o3_autofocus_device
-                )
-                print(f"State after setting to '{target_crisp_state}': {current_state}")
-
-                if current_state == target_crisp_state:
-                    print(
-                        f"Attempting to set {hw_interface.crisp_o3_autofocus_device} back to 'Idle'..."
-                    )
-                    if hw_interface.set_crisp_state(
-                        hw_interface.crisp_o3_autofocus_device, "Idle"
-                    ):
-                        crisp3_state_changed_to_ready = (
-                            False  # Successfully returned to Idle
-                        )
-                        time.sleep(0.5)
-                        print(
-                            f"State after setting back to 'Idle': {hw_interface.get_crisp_state(hw_interface.crisp_o3_autofocus_device)}"
-                        )
-                    else:
-                        print(
-                            f"Failed to set {hw_interface.crisp_o3_autofocus_device} back to 'Idle'."
-                        )
-                elif current_state is not None:
-                    print(
-                        f"Warning: {hw_interface.crisp_o3_autofocus_device} state is '{current_state}' after attempting to set to '{target_crisp_state}'."
-                    )
-            else:
-                print(
-                    f"Failed to set {hw_interface.crisp_o3_autofocus_device} to '{target_crisp_state}'."
-                )
-        elif crisp3_initial_state is None:
-            print(
-                f"Could not get initial state for {hw_interface.crisp_o3_autofocus_device}, skipping its state change test."
-            )
+            file_path2 = os.path.join(save_dir, "camera2_snap.tif")
+            try:
+                tifffile.imwrite(file_path2, cam2_image)
+                print(f"  Image saved to: {file_path2}")
+            except Exception as e_save:
+                print(f"  Error saving image from {hw_interface.camera2}: {e_save}")
         else:
-            print(
-                f"{hw_interface.crisp_o3_autofocus_device} initial state is '{crisp3_initial_state}', not 'Idle'. Skipping '{target_crisp_state}' -> 'Idle' test sequence."
-            )
+            print(f"  Failed to snap image with {hw_interface.camera2}")
+        time.sleep(0.5)
 
-        print("\n--- End of CRISP Tests ---")
+        # Snap and save from Multi Camera
+        print(f"\nSnapping with {hw_interface.multi_camera}...")
+        multi_cam_image = hw_interface.snap_image(
+            camera_label=hw_interface.multi_camera, exposure_ms=10
+        )
+        if multi_cam_image is not None:
+            print(
+                f"  {hw_interface.multi_camera} snap successful. Image shape: {multi_cam_image.shape}, dtype: {multi_cam_image.dtype}"
+            )
+            file_path_multi = os.path.join(save_dir, "multi_camera_snap.tif")
+            try:
+                tifffile.imwrite(file_path_multi, multi_cam_image)
+                print(f"  Image saved to: {file_path_multi}")
+            except Exception as e_save:
+                print(
+                    f"  Error saving image from {hw_interface.multi_camera}: {e_save}"
+                )
+
+            if multi_cam_image.ndim == 2:
+                print("    Multi Camera returned a 2D image.")
+            elif multi_cam_image.ndim == 3 and multi_cam_image.shape[0] == 2:
+                print(
+                    "    Multi Camera returned a stack of 2 images. Saved as a multi-page TIFF."
+                )
+            elif multi_cam_image.ndim == 3:  # General 3D case
+                print(
+                    f"    Multi Camera returned a 3D image with {multi_cam_image.shape[0]} planes. Saved as a multi-page TIFF."
+                )
+        else:
+            print(f"  Failed to snap image with {hw_interface.multi_camera}")
+
+        print("\n--- End of Camera Snap and Save Tests ---")
 
     except FileNotFoundError as e:
         print(f"Initialization failed due to missing or unconfirmed configuration: {e}")
@@ -726,33 +732,6 @@ if __name__ == "__main__":
         traceback.print_exc()
     finally:
         if hw_interface:
-            # Ensure CRISP devices are set back to Idle if their state might have been changed
-            if (
-                crisp1_state_changed_to_ready
-            ):  # If it was successfully changed to Ready and not back to Idle
-                print(
-                    f"\nEnsuring {hw_interface.crisp_o1_autofocus_device} is returned to Idle state in finally block..."
-                )
-                hw_interface.set_crisp_state(
-                    hw_interface.crisp_o1_autofocus_device, "Idle"
-                )
-                print(
-                    f"Final {hw_interface.crisp_o1_autofocus_device} State: {hw_interface.get_crisp_state(hw_interface.crisp_o1_autofocus_device)}"
-                )
-
-            if (
-                crisp3_state_changed_to_ready
-            ):  # If it was successfully changed to Ready and not back to Idle
-                print(
-                    f"\nEnsuring {hw_interface.crisp_o3_autofocus_device} is returned to Idle state in finally block..."
-                )
-                hw_interface.set_crisp_state(
-                    hw_interface.crisp_o3_autofocus_device, "Idle"
-                )
-                print(
-                    f"Final {hw_interface.crisp_o3_autofocus_device} State: {hw_interface.get_crisp_state(hw_interface.crisp_o3_autofocus_device)}"
-                )
-
             print(
                 "\nDiagnostic test finished. Hardware not automatically shut down in this example."
             )
