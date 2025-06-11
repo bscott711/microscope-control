@@ -113,7 +113,7 @@ class AcquisitionGUI(QMainWindow):
             config_path = os.path.abspath(self.const.CFG_PATH)
             if not os.path.exists(config_path):
                 raise FileNotFoundError(
-                    f"Hardware config file not found at: {config_path}"
+                    f"Hardware config file not found at: {config_path}",
                 )
 
             print(f"Loading hardware configuration: {config_path}")
@@ -129,22 +129,35 @@ class AcquisitionGUI(QMainWindow):
         self.nav_panel = NavigationPanel()
         self.live_button = QPushButton("Live")
         self.live_button.setCheckable(True)
-        self.live_exposure_spinbox = QDoubleSpinBox(minimum=1, maximum=1000, value=30.0)
+        self.live_exposure_spinbox = QDoubleSpinBox(
+            minimum=1,
+            maximum=1000,
+            value=30.0,
+        )
 
         self.ts_group = QGroupBox("Time Series Acquisition")
         self.time_points_spinbox = QSpinBox(minimum=1, maximum=10000, value=1)
         self.interval_spinbox = QDoubleSpinBox(
-            minimum=0, maximum=3600, value=1.0, singleStep=0.1, decimals=1
+            minimum=0,
+            maximum=3600,
+            value=1.0,
+            singleStep=0.1,
+            decimals=1,
         )
         self.minimal_interval_checkbox = QCheckBox("Minimal Interval")
 
         self.vol_group = QGroupBox("Volume & Timing")
         self.slices_spinbox = QSpinBox(minimum=1, maximum=1000, value=10)
         self.step_size_spinbox = QDoubleSpinBox(
-            minimum=0.01, maximum=100.0, value=1.0, singleStep=0.1
+            minimum=0.01,
+            maximum=100.0,
+            value=1.0,
+            singleStep=0.1,
         )
         self.laser_duration_spinbox = QDoubleSpinBox(
-            minimum=1, maximum=1000, value=10.0
+            minimum=1,
+            maximum=1000,
+            value=10.0,
         )
 
         self.save_group = QGroupBox("Data Saving")
@@ -226,7 +239,7 @@ class AcquisitionGUI(QMainWindow):
         self.run_button.clicked.connect(self._on_run)
         self.cancel_button.clicked.connect(self._on_cancel)
         self.minimal_interval_checkbox.toggled.connect(
-            self.interval_spinbox.setDisabled
+            self.interval_spinbox.setDisabled,
         )
         self.live_button.toggled.connect(self._on_live_toggled)
 
@@ -373,20 +386,26 @@ class AcquisitionGUI(QMainWindow):
         )
 
     @Slot(np.ndarray)
-    def update_image(self, image: np.ndarray):
-        """Converts a numpy array from the engine to a QPixmap and displays it."""
-        h, w = image.shape
-        # Ensure the underlying numpy array is contiguous.
-        if not image.flags["C_CONTIGUOUS"]:
-            image = np.ascontiguousarray(image)
-        q_image = QImage(image.data, w, h, w, QImage.Format.Format_Grayscale8)
-        pixmap = QPixmap.fromImage(q_image)
+    def update_image(self, image_8bit: np.ndarray):
+        """
+        Converts a normalized 8-bit numpy array to a QPixmap for display.
+        This method is fast and memory-safe.
+        """
+        h, w = image_8bit.shape
+        # The worker thread now sends a normalized uint8 array.
+        # We can display it directly without any further processing.
+        q_image = QImage(image_8bit.data, w, h, w, QImage.Format.Format_Grayscale8)
+
+        # Use .copy() to force a deep copy into Qt-managed memory. This is
+        # essential to prevent memory leaks and crashes.
+        pixmap = QPixmap.fromImage(q_image.copy())
+
         self.image_display.setPixmap(
             pixmap.scaled(
                 self.image_display.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
-            )
+            ),
         )
 
     @Slot(str)

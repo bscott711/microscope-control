@@ -12,6 +12,7 @@ import time
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
+from .display import normalize_to_8bit  # <--- IMPORT THE NEW FUNCTION
 from .hardware import HardwareController
 
 
@@ -56,9 +57,13 @@ class LiveEngine(QObject):
                     try:
                         tagged_img = self.hw.mmc.popNextTaggedImage()
                         img = tagged_img.pix.reshape(
-                            self.hw.mmc.getImageHeight(), self.hw.mmc.getImageWidth()
+                            self.hw.mmc.getImageHeight(),
+                            self.hw.mmc.getImageWidth(),
                         )
-                        self.new_live_image.emit(img)
+                        # --- NORMALIZE IMAGE BEFORE EMITTING ---
+                        image_8bit = normalize_to_8bit(img)
+                        self.new_live_image.emit(image_8bit)
+                        # ----------------------------------------
                     except IndexError:
                         # This can happen in a race condition where the buffer
                         # empties between our check and the popNextTaggedImage

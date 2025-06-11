@@ -14,6 +14,7 @@ import numpy as np
 import tifffile
 from PySide6.QtCore import QObject, Signal
 
+from .display import normalize_to_8bit  # <--- IMPORT THE NEW FUNCTION
 from .hardware import HardwareController
 from .settings import AcquisitionSettings
 
@@ -123,8 +124,14 @@ class AcquisitionEngine(QObject):
                 img = tagged_img.pix.reshape(
                     self.hw.mmc.getImageHeight(), self.hw.mmc.getImageWidth()
                 )
-                self.new_image_ready.emit(img)
+
+                # --- NORMALIZE IMAGE BEFORE EMITTING ---
+                image_8bit = normalize_to_8bit(img)
+                self.new_image_ready.emit(image_8bit)
+                # ----------------------------------------
+
                 if self.settings.should_save:
+                    # Still save the original full-depth image
                     self.current_volume_images.append(img)
             else:
                 time.sleep(0.001)  # Small sleep to prevent busy-waiting

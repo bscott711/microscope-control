@@ -67,6 +67,7 @@ class HardwareController:
     def setup_for_acquisition(self, settings: AcquisitionSettings):
         """Configures all devices for a triggered Z-stack acquisition."""
         print("Configuring devices for acquisition...")
+        self.mmc.setExposure(settings.camera_exposure_ms)
         self._configure_plogic(settings)
         self._configure_galvo_for_scan(settings)
         self._arm_spim_devices()
@@ -132,7 +133,7 @@ class HardwareController:
         self._set_property(galvo, "BeamEnabled", "No")
         self._set_property(galvo, "SPIMState", "Idle")
         self._set_property(galvo, "SingleAxisYOffset(deg)", self.initial_galvo_y_offset)
-        self.find_and_set_trigger_mode("Internal")
+        self.find_and_set_trigger_mode("Internal Trigger")
 
     # --- Live Scan & Navigation Methods ---
 
@@ -220,10 +221,13 @@ class HardwareController:
     def get_pixel_size_um(self) -> float:
         """Returns the camera pixel size from Micro-Manager."""
         try:
-            return self.mmc.getPixelSizeUm()
+            # Use a keyword argument to disambiguate the overloaded method.
+            # Ignore the type checker warning, as it struggles with the dynamic
+            # nature of pymmcore-plus method overloads.
+            return self.mmc.getPixelSizeUm(xyOrZStageLabel=self.const.XY_STAGE_LABEL)  # type: ignore
         except Exception:
-            print("Warn: Could not get pixel size. Defaulting to 1.0 µm.")
-            return 1.0
+            print("Warn: Could not get pixel size. Defaulting to 0.120 µm.")
+            return 0.120
 
     def find_and_set_trigger_mode(self, mode: str) -> bool:
         """Sets the camera trigger mode."""
