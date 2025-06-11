@@ -6,6 +6,8 @@ It provides a clean, high-level API for the acquisition engine to use,
 without exposing the underlying `pymmcore-plus` details.
 """
 
+import time
+
 from pymmcore_plus import CMMCorePlus
 
 from .settings import AcquisitionSettings, HardwareConstants
@@ -38,19 +40,30 @@ class HardwareController:
             print("HardwareController initialized in DEMO mode.")
 
     def _execute_tiger_serial_command(self, command: str):
-        """Sends a raw serial command to the Tiger controller."""
+        """
+        Sends a raw serial command to the Tiger controller.
+        This version is matched to the working one_shot_laser.py script,
+        using a small time.sleep() instead of waitForDevice().
+        """
         if self.is_demo:
             print(f"[DEMO] Skipping serial command: {command}")
             return
+
         hub = self.const.TIGER_COMM_HUB_LABEL
         original_setting = self.mmc.getProperty(hub, "OnlySendSerialCommandOnChange")
+
         if original_setting == "Yes":
             self.mmc.setProperty(hub, "OnlySendSerialCommandOnChange", "No")
+
         self.mmc.setProperty(hub, "SerialCommand", command)
         print(f"[SERIAL] Sending: {command}")
-        self.mmc.waitForDevice(hub)
+
         if original_setting == "Yes":
             self.mmc.setProperty(hub, "OnlySendSerialCommandOnChange", "Yes")
+
+        # This small delay is present in the working script and appears to be critical
+        # for giving the controller time to process rapid commands.
+        time.sleep(0.02)
 
     def _set_property(self, device_label: str, prop: str, value):
         """Safely sets a property on a device if it exists and has changed."""
@@ -81,85 +94,60 @@ class HardwareController:
         # Arm SPIM devices
         self._arm_spim_devices()
 
-        """Programs the PLogic card for timed laser and camera pulses."""
-        plogic_addr = self.const.PLOGIC_LABEL[-2:]
-        print(f"Programming PLogic at {plogic_addr}")
-
-        # --- Laser Pulse Configuration ---
-        self._execute_tiger_serial_command(f"{plogic_addr}CCA X={self.const.PLOGIC_LASER_PRESET_NUM}")
-        self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_LASER_ON_CELL}")
-        self._execute_tiger_serial_command("CCA Y=14")
-        cycles = int(settings.laser_trig_duration_ms * self.const.PULSES_PER_MS)
-        self._execute_tiger_serial_command(f"CCA Z={cycles}")
-        cam_ttl = self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR
-        galvo_ttl = self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR
-        clock_addr = self.const.PLOGIC_4KHZ_CLOCK_ADDR
-
-        # --- Delay Before Laser ---
-        self._execute_tiger_serial_command("CCA Y=13")
-        delay_cycles = int(settings.delay_before_laser_ms * self.const.PULSES_PER_MS)
-        self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-        self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
-        self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_LASER_CELL}")
-
-        # --- Delay Before Camera ---
-        self._execute_tiger_serial_command("CCA Y=13")
-        delay_cycles = int(settings.delay_before_camera_ms * self.const.PULSES_PER_MS)
-        self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-        self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
-        self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_CAMERA_CELL}")
-
-        # --- Re-enable Galvo Trigger Chain (Critical!) ---
-        self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
-
-        # --- Enable Clock Output ---
-        self._execute_tiger_serial_command(f"{plogic_addr}M D={clock_addr}")  # Enable 4kHz clock
-        self._execute_tiger_serial_command(f"{plogic_addr}M E={cam_ttl}")  # Enable camera trigger
-
-        # Re-enable Galvo TTL chain
-        self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
-
     def _configure_plogic(self, settings: AcquisitionSettings):
+        """
+        Configures the PLogic card.
+        Combines the logic from the working one_shot_laser.py script with
+        the necessary commands to enable outputs from a reset state.
+        """
         if getattr(self, "is_configuring", False):
             print("Already configuring PLogic. Skipping.")
             return
         self.is_configuring = True
         try:
-            self._reset_plogic()  # Reset PLogic before reprogramming
-
+            self._reset_plogic()
             plogic_addr = self.const.PLOGIC_LABEL[-2:]
             print(f"Programming PLogic at {plogic_addr}")
 
-            # --- Laser Pulse Configuration ---
+            # Part 1: Configure cell relationships from the working script
+            # Configure laser pulse (Cell 10), triggered by camera (44)
             self._execute_tiger_serial_command(f"{plogic_addr}CCA X={self.const.PLOGIC_LASER_PRESET_NUM}")
             self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_LASER_ON_CELL}")
             self._execute_tiger_serial_command("CCA Y=14")
-            cycles = int(settings.laser_trig_duration_ms * self.const.PULSES_PER_MS)
-            self._execute_tiger_serial_command(f"CCA Z={cycles}")
-            cam_ttl = self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR
-            galvo_ttl = self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR
-            clock_addr = self.const.PLOGIC_4KHZ_CLOCK_ADDR
+            pulse_duration_cycles = int(settings.laser_trig_duration_ms * self.const.PULSES_PER_MS)
+            self._execute_tiger_serial_command(f"CCA Z={pulse_duration_cycles}")
+            self._execute_tiger_serial_command(
+                f"CCB X={self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
+            )
 
-            # --- Delay Before Laser ---
+            # Configure delay before laser (Cell 11), triggered by galvo (43)
+            self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_LASER_CELL}")
             self._execute_tiger_serial_command("CCA Y=13")
             delay_cycles = int(settings.delay_before_laser_ms * self.const.PULSES_PER_MS)
             self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-            self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
-            self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_LASER_CELL}")
+            self._execute_tiger_serial_command(
+                f"CCB X={self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
+            )
 
-            # --- Delay Before Camera ---
+            # Configure delay before camera (Cell 12), triggered by galvo (43)
+            self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_CAMERA_CELL}")
             self._execute_tiger_serial_command("CCA Y=13")
             delay_cycles = int(settings.delay_before_camera_ms * self.const.PULSES_PER_MS)
             self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-            self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
-            self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_CAMERA_CELL}")
+            self._execute_tiger_serial_command(
+                f"CCB X={self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
+            )
 
-            # --- Enable Clock Output ---
-            self._execute_tiger_serial_command(f"{plogic_addr}M D={clock_addr}")  # Enable 4kHz clock
-            self._execute_tiger_serial_command(f"{plogic_addr}M E={cam_ttl}")  # Enable camera trigger
+            # Part 2: Complete the trigger chain and enable outputs
+            # Connect the output of the "camera delay" cell (12) to the input of the actual camera trigger (44)
+            self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR}")
+            self._execute_tiger_serial_command(
+                f"CCB X={self.const.PLOGIC_DELAY_BEFORE_CAMERA_CELL} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
+            )
 
-            # --- Reconnect Galvo TTL Line (critical!) ---
-            self._execute_tiger_serial_command(f"CCB X={galvo_ttl} Y={clock_addr}")
+            # Enable the master clock and the final camera trigger output line
+            self._execute_tiger_serial_command(f"{plogic_addr}M D={self.const.PLOGIC_4KHZ_CLOCK_ADDR}")
+            self._execute_tiger_serial_command(f"{plogic_addr}M E={self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR}")
 
         finally:
             self.is_configuring = False
