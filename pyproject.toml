@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 # The name of your package inside the 'src' directory
-name = "microscope"
+name = "microscope-control"
 version = "0.2.0.dev0"
 authors = [
   { name="Brandon Scott", email="brandon.scott@sdsmt.edu" },

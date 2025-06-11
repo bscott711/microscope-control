@@ -35,8 +35,7 @@ class HardwareController:
             hub_lib = self.mmc.getDeviceLibrary(self.const.TIGER_COMM_HUB_LABEL)
             self.is_demo = hub_lib == "Utilities"
         except Exception:
-            self.is_demo = False
-
+            self.is_demo = True  # Assume demo if hub not found
         if self.is_demo:
             print("HardwareController initialized in DEMO mode.")
 
@@ -63,6 +62,8 @@ class HardwareController:
         else:
             print(f"Warn: Property '{prop}' not found on device '{device_label}'.")
 
+    # --- Acquisition Methods ---
+
     def setup_for_acquisition(self, settings: AcquisitionSettings):
         """Configures all devices for a triggered Z-stack acquisition."""
         print("Configuring devices for acquisition...")
@@ -88,8 +89,7 @@ class HardwareController:
         self._execute_tiger_serial_command(cmd)
 
     def _configure_galvo_for_scan(self, settings: AcquisitionSettings):
-        """Calculates and sets galvo parameters for a Z-stack centered
-        on its current position."""
+        """Calculates and sets galvo parameters for a Z-stack."""
         galvo = self.const.GALVO_A_LABEL
         slope = self.const.SLICE_CALIBRATION_SLOPE_UM_PER_DEG
         if abs(slope) < 1e-9:
@@ -118,7 +118,6 @@ class HardwareController:
 
     def _arm_spim_devices(self):
         """Sets the SPIM state of relevant devices to 'Armed'."""
-        # --- FIX: Only the Galvo device is armed in this scan mode ---
         self._set_property(self.const.GALVO_A_LABEL, "SPIMState", "Armed")
 
     def trigger_acquisition(self):
@@ -126,39 +125,116 @@ class HardwareController:
         print("Triggering acquisition...")
         self._set_property(self.const.GALVO_A_LABEL, "SPIMState", "Running")
 
-    def get_pixel_size_um(self) -> float:
-        """Returns the camera pixel size from Micro-Manager."""
-        try:
-            return self.mmc.getPixelSizeUm()
-        except Exception:
-            print("Warning: Could not get pixel size. Defaulting to 1.0 µm.")
-            return 1.0
-
-    def find_and_set_trigger_mode(self, mode: str) -> bool:
-        """Sets the camera trigger mode (e.g., 'Internal' or 'Edge Trigger')."""
-        if self.is_demo:
-            print("[DEMO] Skipping trigger mode setting.")
-            return True
-
-        cam = self.const.CAMERA_A_LABEL
-        if not self.mmc.hasProperty(cam, "TriggerMode"):
-            return True
-
-        allowed = self.mmc.getAllowedPropertyValues(cam, "TriggerMode")
-        if mode in allowed:
-            self._set_property(cam, "TriggerMode", mode)
-            return True
-        print(f"Warn: Mode '{mode}' not supported. Allowed: {allowed}")
-        return False
-
     def final_cleanup(self):
         """Resets hardware to a safe, idle state after acquisition."""
         print("Performing final hardware cleanup...")
         galvo = self.const.GALVO_A_LABEL
         self._set_property(galvo, "BeamEnabled", "No")
         self._set_property(galvo, "SPIMState", "Idle")
-
-        # --- FIX: Only the Galvo device's state is reset ---
         self._set_property(galvo, "SingleAxisYOffset(deg)", self.initial_galvo_y_offset)
-
         self.find_and_set_trigger_mode("Internal")
+
+    # --- Live Scan & Navigation Methods ---
+
+    def start_live_scan(self, exposure_ms: float):
+        """Starts a continuous 'live' camera acquisition."""
+        print(f"Starting live scan with {exposure_ms}ms exposure.")
+        self.mmc.setExposure(exposure_ms)
+        self.mmc.startContinuousSequenceAcquisition(0)
+
+    def stop_live_scan(self):
+        """Stops the continuous 'live' camera acquisition."""
+        print("Stopping live scan.")
+        if self.mmc.isSequenceRunning():
+            self.mmc.stopSequenceAcquisition()
+
+    def get_position(self, device_label: str) -> float:
+        """Gets the current position of a 1D stage."""
+        return self.mmc.getPosition(device_label)
+
+    def set_position(self, device_label: str, position: float):
+        """Moves a 1D stage to an absolute position and waits for it to arrive."""
+        print(f"Moving {device_label} to {position}...")
+        self.mmc.setPosition(device_label, position)
+        self.mmc.waitForDevice(device_label)
+        print("Move complete.")
+
+    def set_relative_position(self, device_label: str, offset: float):
+        """Moves a 1D stage by a relative offset."""
+        current_pos = self.get_position(device_label)
+        self.set_position(device_label, current_pos + offset)
+
+    def get_all_positions(self) -> dict[str, float]:
+        """Queries and returns the positions of all primary navigation axes."""
+        positions = {}
+        try:
+            x = self.mmc.getXPosition(self.const.XY_STAGE_LABEL)
+            y = self.mmc.getYPosition(self.const.XY_STAGE_LABEL)
+            positions["XY-X"] = x
+            positions["XY-Y"] = y
+        except Exception:
+            positions["XY-X"] = 0.0
+            positions["XY-Y"] = 0.0
+
+        try:
+            positions["Z-Piezo"] = self.get_position(self.const.Z_PIEZO_LABEL)
+            positions["Z-Stage"] = self.get_position(self.const.Z_STAGE_LABEL)
+            positions["Filter-Z"] = self.get_position(self.const.FILTER_Z_STAGE_LABEL)
+        except Exception:
+            positions["Z-Piezo"] = 0.0
+            positions["Z-Stage"] = 0.0
+            positions["Filter-Z"] = 0.0
+        return positions
+
+    # --- NEW: Jogging Methods ---
+    def start_jog(self, device_label: str, speed_microns_per_sec: float):
+        """Starts jogging a stage continuously."""
+        print(f"Jogging {device_label} at {speed_microns_per_sec} µm/s")
+        # Note: The real implementation might require specific serial commands
+        # to the Tiger controller. This is a placeholder for that logic.
+        if self.is_demo:
+            print("[DEMO] Jogging started.")
+
+    def stop_jog(self, device_label: str):
+        """Stops jogging a specific stage."""
+        print(f"Stopping jog for {device_label}")
+        if self.is_demo:
+            print("[DEMO] Jogging stopped.")
+
+    def stop_all_stages(self):
+        """Stops all movement on all stages."""
+        print("STOPPING ALL STAGE MOVEMENT")
+        # Stop all relevant stages individually
+        for stage_label in [
+            self.const.XY_STAGE_LABEL,
+            self.const.Z_PIEZO_LABEL,
+            self.const.Z_STAGE_LABEL,
+            self.const.FILTER_Z_STAGE_LABEL,
+        ]:
+            try:
+                self.mmc.stop(stage_label)
+            except Exception as e:
+                print(f"Warn: Could not stop stage '{stage_label}': {e}")
+
+    # --- Utility Methods ---
+    def get_pixel_size_um(self) -> float:
+        """Returns the camera pixel size from Micro-Manager."""
+        try:
+            return self.mmc.getPixelSizeUm()
+        except Exception:
+            print("Warn: Could not get pixel size. Defaulting to 1.0 µm.")
+            return 1.0
+
+    def find_and_set_trigger_mode(self, mode: str) -> bool:
+        """Sets the camera trigger mode."""
+        if self.is_demo:
+            return True
+        cam = self.const.CAMERA_A_LABEL
+        if not self.mmc.hasProperty(cam, "TriggerMode"):
+            return True
+        allowed = self.mmc.getAllowedPropertyValues(cam, "TriggerMode")
+        if mode in allowed:
+            self._set_property(cam, "TriggerMode", mode)
+            return True
+        print(f"Warn: Mode '{mode}' not supported. Allowed: {allowed}")
+        return False
