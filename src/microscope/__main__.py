@@ -5,7 +5,6 @@ Main application launch script for the Microscope Control package.
 This script sets up the Qt Application and initializes the main window. It is
 designed to be executed when the package is run as a script.
 """
-
 import sys
 
 from pymmcore_plus import CMMCorePlus, find_micromanager
@@ -109,7 +108,10 @@ class TestRunner(QObject):
 def main():
     """Initializes and runs the Qt application."""
     app = QApplication(sys.argv)
-    TestRunner(app)
+    # FIX: Assign the TestRunner to a variable to prevent it from being
+    # garbage collected prematurely, which would cause the QThread to be
+    # destroyed while running.
+    runner = TestRunner(app)  # noqa: F841
     sys.exit(app.exec())
 
 
