@@ -6,11 +6,14 @@ This module contains the main AcquisitionGUI class, which builds and manages
 the user interface for the microscope control application using PySide6.
 """
 
+import sys
+from typing import Optional
+
 import numpy as np
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage, QPixmap
+from pymmcore_plus import CMMCorePlus, find_micromanager
+from PySide6.QtCore import Qt, QThread, Slot
+from PySide6.QtGui import QCloseEvent, QImage, QPixmap
 from PySide6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -27,7 +30,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .settings import AcquisitionSettings
+from .engine import AcquisitionEngine
+from .hardware import HardwareController
+from .settings import AcquisitionSettings, HardwareConstants
 
 
 class AcquisitionGUI(QMainWindow):
@@ -38,24 +43,45 @@ class AcquisitionGUI(QMainWindow):
         self.setWindowTitle("Microscope Control")
         self.resize(800, 900)
 
+        # --- Initialize Core Components ---
+        # This logic is moved from the TestRunner into the main GUI
+        self.mmc = CMMCorePlus.instance()
+        self.const = HardwareConstants()
+        self._load_hardware_config()
+
+        self.hw_controller = HardwareController(self.mmc, self.const)
+        self.engine: Optional[AcquisitionEngine] = None
+        self._worker_thread: Optional[QThread] = None
+
+        # --- Build the UI ---
         self._create_widgets()
         self._layout_widgets()
-        self._connect_signals()
+        self._connect_ui_signals()
+        self._update_estimates()
 
-        self.engine = None
-        self._worker_thread = None
+    def _load_hardware_config(self):
+        """Loads the device adapters and demo configuration."""
+        try:
+            mm_path = find_micromanager()
+            if not mm_path:
+                raise RuntimeError("Could not find MM. Run 'mmcore install'.")
+            self.mmc.setDeviceAdapterSearchPaths([mm_path])
+            self.mmc.loadSystemConfiguration("MMConfig_demo.cfg")
+            print("Loaded Demo Hardware Configuration.")
+        except Exception as e:
+            # In a real app, show a critical error dialog
+            print(f"CRITICAL: Failed to load system configuration: {e}")
+            sys.exit()
 
     def _create_widgets(self):
         """Create all the widgets for the user interface."""
-        # --- Time Series Group ---
         self.ts_group = QGroupBox("Time Series")
         self.time_points_spinbox = QSpinBox(minimum=1, maximum=10000, value=1)
         self.interval_spinbox = QDoubleSpinBox(
-            minimum=0, maximum=3600, value=10.0, singleStep=0.1
+            minimum=0, maximum=3600, value=1.0, singleStep=0.1, decimals=1
         )
         self.minimal_interval_checkbox = QCheckBox("Minimal Interval")
 
-        # --- Volume & Timing Group ---
         self.vol_group = QGroupBox("Volume & Timing")
         self.slices_spinbox = QSpinBox(minimum=1, maximum=1000, value=10)
         self.step_size_spinbox = QDoubleSpinBox(
@@ -65,7 +91,6 @@ class AcquisitionGUI(QMainWindow):
             minimum=1, maximum=1000, value=10.0
         )
 
-        # --- Data Saving Group ---
         self.save_group = QGroupBox("Data Saving")
         self.save_checkbox = QCheckBox("Save to disk")
         self.save_dir_entry = QLineEdit()
@@ -73,13 +98,11 @@ class AcquisitionGUI(QMainWindow):
         self.browse_button = QPushButton("Browse...")
         self.prefix_entry = QLineEdit("acquisition")
 
-        # --- Estimates Group ---
         self.est_group = QGroupBox("Estimates")
         self.exposure_label = QLabel("...")
         self.min_interval_label = QLabel("...")
         self.total_time_label = QLabel("...")
 
-        # --- Main Controls & Display ---
         self.image_display = QLabel("Camera feed will appear here.")
         self.image_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_display.setStyleSheet("background-color: black; color: white;")
@@ -91,8 +114,6 @@ class AcquisitionGUI(QMainWindow):
     def _layout_widgets(self):
         """Arrange all the created widgets in layouts."""
         main_layout = QVBoxLayout()
-
-        # Top controls layout (Time Series, Volume)
         top_controls_layout = QHBoxLayout()
         ts_layout = QFormLayout(self.ts_group)
         ts_layout.addRow("Time Points:", self.time_points_spinbox)
@@ -107,7 +128,6 @@ class AcquisitionGUI(QMainWindow):
         top_controls_layout.addWidget(self.vol_group)
         main_layout.addLayout(top_controls_layout)
 
-        # Saving layout
         save_layout = QGridLayout(self.save_group)
         save_layout.addWidget(self.save_checkbox, 0, 0)
         save_layout.addWidget(self.save_dir_entry, 0, 1)
@@ -116,17 +136,14 @@ class AcquisitionGUI(QMainWindow):
         save_layout.addWidget(self.prefix_entry, 0, 4)
         main_layout.addWidget(self.save_group)
 
-        # Estimates layout
         est_layout = QFormLayout(self.est_group)
         est_layout.addRow("Camera Exposure (ms):", self.exposure_label)
         est_layout.addRow("Min. Interval/Volume (s):", self.min_interval_label)
         est_layout.addRow("Estimated Total Time:", self.total_time_label)
         main_layout.addWidget(self.est_group)
 
-        # Image Display
         main_layout.addWidget(self.image_display, stretch=1)
 
-        # Bottom control buttons
         bottom_button_layout = QHBoxLayout()
         bottom_button_layout.addWidget(self.run_button)
         bottom_button_layout.addWidget(self.cancel_button)
@@ -137,35 +154,62 @@ class AcquisitionGUI(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
-    def _connect_signals(self):
+    def _connect_ui_signals(self):
         """Connect widget signals to handler methods (slots)."""
         self.browse_button.clicked.connect(self._on_browse)
+        self.run_button.clicked.connect(self._on_run)
+        self.cancel_button.clicked.connect(self._on_cancel)
+        self.minimal_interval_checkbox.toggled.connect(
+            self.interval_spinbox.setDisabled
+        )
 
-        # Connect all input widgets to the estimate update function
-        self.time_points_spinbox.valueChanged.connect(self._update_estimates)
-        self.interval_spinbox.valueChanged.connect(self._update_estimates)
+        for widget in (
+            self.time_points_spinbox,
+            self.interval_spinbox,
+            self.slices_spinbox,
+            self.laser_duration_spinbox,
+        ):
+            widget.valueChanged.connect(self._update_estimates)
         self.minimal_interval_checkbox.stateChanged.connect(self._update_estimates)
-        self.slices_spinbox.valueChanged.connect(self._update_estimates)
-        self.laser_duration_spinbox.valueChanged.connect(self._update_estimates)
 
-        # This is where we will connect to the engine later
-        # self.run_button.clicked.connect(self._on_run)
-        # self.cancel_button.clicked.connect(self._on_cancel)
+    def _on_run(self):
+        """Called when the 'Run' button is clicked. Sets up and starts the engine."""
+        settings = self._get_settings_from_gui()
+        self.engine = AcquisitionEngine(self.hw_controller, settings)
+        self._worker_thread = QThread()
+        self.engine.moveToThread(self._worker_thread)
 
-        self._update_estimates()  # Initial calculation
+        # Connect engine signals to GUI slots
+        self._worker_thread.started.connect(self.engine.run_acquisition)
+        self.engine.acquisition_finished.connect(self.on_acquisition_finished)
+        self.engine.new_image_ready.connect(self.update_image)
+        self.engine.status_updated.connect(self.update_status)
 
+        self.run_button.setHidden(True)
+        self.cancel_button.setHidden(False)
+        self._worker_thread.start()
+
+    @Slot()
+    def _on_cancel(self):
+        """Called when 'Cancel' is clicked. Requests the engine to stop."""
+        if self.engine:
+            self.engine.cancel()
+        self.cancel_button.setEnabled(False)
+        self.update_status("Cancelling...")
+
+    @Slot(str)
     def _on_browse(self):
         """Opens a dialog to select a save directory."""
         directory = QFileDialog.getExistingDirectory(self, "Select Save Directory")
         if directory:
             self.save_dir_entry.setText(directory)
 
+    @Slot()
     def _update_estimates(self):
         """Calculates and updates the timing estimates in the GUI."""
         settings = self._get_settings_from_gui()
         self.exposure_label.setText(f"{settings.camera_exposure_ms:.2f}")
 
-        # Basic estimation logic
         overhead_factor = 1.10
         total_exposure_ms = settings.num_slices * settings.camera_exposure_ms
         min_interval_s = (total_exposure_ms * overhead_factor) / 1000.0
@@ -196,15 +240,12 @@ class AcquisitionGUI(QMainWindow):
             save_prefix=self.prefix_entry.text(),
         )
 
-    # --- Placeholder Slots for Engine Communication ---
-
+    @Slot(np.ndarray)
     def update_image(self, image: np.ndarray):
         """Converts a numpy array from the engine to a QPixmap and displays it."""
         h, w = image.shape
-        # The QImage constructor expects bytes, so we use `tobytes()`
-        q_image = QImage(image.tobytes(), w, h, w, QImage.Format.Format_Grayscale8)
+        q_image = QImage(image.data, w, h, w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(q_image)
-        # Scale pixmap to fit the label, keeping aspect ratio
         self.image_display.setPixmap(
             pixmap.scaled(
                 self.image_display.size(),
@@ -213,12 +254,25 @@ class AcquisitionGUI(QMainWindow):
             )
         )
 
+    @Slot(str)
     def update_status(self, message: str):
         """Updates the status bar with a message from the engine."""
         self.status_bar.showMessage(message)
 
+    @Slot()
     def on_acquisition_finished(self):
         """Resets the GUI to its idle state after an acquisition finishes."""
+        if self._worker_thread:
+            self._worker_thread.quit()
+            self._worker_thread.wait()
         self.run_button.setHidden(False)
         self.cancel_button.setHidden(True)
+        self.cancel_button.setEnabled(True)
         self.status_bar.showMessage("Ready")
+
+    def closeEvent(self, event: QCloseEvent):
+        """Ensures the engine is stopped cleanly when the window is closed."""
+        if self.engine and self.engine._is_running:
+            self._on_cancel()
+            self.on_acquisition_finished()
+        event.accept()

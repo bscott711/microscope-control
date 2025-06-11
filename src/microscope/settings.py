@@ -13,10 +13,10 @@ from dataclasses import dataclass
 class AcquisitionSettings:
     """Stores all user-configurable acquisition parameters."""
 
+    # These will be set by the GUI in the future
     num_slices: int = 10
     step_size_um: float = 1.0
     laser_trig_duration_ms: float = 10.0
-    # These will be set by the GUI in the future
     time_points: int = 1
     time_interval_s: float = 0.0
     is_minimal_interval: bool = True

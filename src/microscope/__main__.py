@@ -4,6 +4,7 @@ Main application launch script for the Microscope Control package.
 
 This script sets up the Qt Application and initializes the main window.
 """
+
 import sys
 
 from PySide6.QtWidgets import QApplication

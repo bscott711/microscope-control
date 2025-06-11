@@ -7,9 +7,6 @@ It provides a clean, high-level API for the acquisition engine to use,
 without exposing the underlying `pymmcore-plus` details.
 """
 
-import time
-from typing import List, Optional
-
 from pymmcore_plus import CMMCorePlus
 
 from .settings import AcquisitionSettings, HardwareConstants
@@ -84,7 +81,9 @@ class HardwareController:
         self._execute_tiger_serial_command("CCA Y=14")  # one-shot mode
         cycles = int(settings.laser_trig_duration_ms * self.const.PULSES_PER_MS)
         self._execute_tiger_serial_command(f"CCA Z={cycles}")
-        cmd = f"CCB X={self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
+        cam_ttl = self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR
+        clock_addr = self.const.PLOGIC_4KHZ_CLOCK_ADDR
+        cmd = f"CCB X={cam_ttl} Y={clock_addr}"
         self._execute_tiger_serial_command(cmd)
 
     def _configure_galvo_and_piezo(self, settings: AcquisitionSettings):
@@ -129,7 +128,7 @@ class HardwareController:
     def find_and_set_trigger_mode(self, mode: str) -> bool:
         """Sets the camera trigger mode (e.g., 'Internal' or 'Edge Trigger')."""
         if self.is_demo:
-            print(f"[DEMO] Skipping trigger mode setting.")
+            print("[DEMO] Skipping trigger mode setting.")
             return True
 
         cam = self.const.CAMERA_A_LABEL
