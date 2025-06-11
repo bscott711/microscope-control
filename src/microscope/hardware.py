@@ -1,7 +1,6 @@
 # src/microscope/hardware.py
 """
 Hardware Controller Module
-
 This module abstracts all direct hardware communication with the microscope.
 It provides a clean, high-level API for the acquisition engine to use,
 without exposing the underlying `pymmcore-plus` details.
@@ -18,7 +17,6 @@ class HardwareController:
     def __init__(self, mmc: CMMCorePlus, const: HardwareConstants):
         """
         Initializes the HardwareController.
-
         Args:
             mmc: The pymmcore-plus instance.
             const: The HardwareConstants data object.
@@ -44,7 +42,6 @@ class HardwareController:
         if self.is_demo:
             print(f"[DEMO] Skipping serial command: {command}")
             return
-
         hub = self.const.TIGER_COMM_HUB_LABEL
         original_setting = self.mmc.getProperty(hub, "OnlySendSerialCommandOnChange")
         if original_setting == "Yes":
@@ -57,45 +54,71 @@ class HardwareController:
     def _set_property(self, device_label: str, prop: str, value):
         """Safely sets a property on a device if it exists and has changed."""
         if self.mmc.hasProperty(device_label, prop):
-            if self.mmc.getProperty(device_label, prop) != str(value):
+            current_value = self.mmc.getProperty(device_label, prop)
+            if current_value != str(value):
+                print(f"Setting {device_label}.{prop} = {value} (was {current_value})")
                 self.mmc.setProperty(device_label, prop, value)
         else:
             print(f"Warn: Property '{prop}' not found on device '{device_label}'.")
-
-    # --- Acquisition Methods ---
 
     def setup_for_acquisition(self, settings: AcquisitionSettings):
         """Configures all devices for a triggered Z-stack acquisition."""
         print("Configuring devices for acquisition...")
         self.mmc.setCameraDevice(self.const.CAMERA_A_LABEL)
         self.mmc.setExposure(settings.camera_exposure_ms)
-        self._set_property(self.const.GALVO_A_LABEL, "BeamEnabled", "Yes")
+
+        # Set Trigger Mode
+        if not self.find_and_set_trigger_mode("Edge Trigger"):
+            raise RuntimeError("Failed to set external trigger mode.")
+
+        # Configure PLogic timing
         self._configure_plogic(settings)
+
+        # Configure SPIM scan parameters
         self._configure_spim_scan(settings)
+
+        # Arm SPIM devices
         self._arm_spim_devices()
-        self.find_and_set_trigger_mode("Edge Trigger")
 
     def _configure_plogic(self, settings: AcquisitionSettings):
         """Programs the PLogic card for timed laser and camera pulses."""
         plogic_addr = self.const.PLOGIC_LABEL[-2:]
+        print(f"Programming PLogic at {plogic_addr}")
 
-        cmd = f"{plogic_addr}CCA X={self.const.PLOGIC_LASER_PRESET_NUM}"
-        self._execute_tiger_serial_command(cmd)
+        self._execute_tiger_serial_command(
+            f"{plogic_addr}CCA X={self.const.PLOGIC_LASER_PRESET_NUM}"
+        )
         self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_LASER_ON_CELL}")
         self._execute_tiger_serial_command("CCA Y=14")
         cycles = int(settings.laser_trig_duration_ms * self.const.PULSES_PER_MS)
         self._execute_tiger_serial_command(f"CCA Z={cycles}")
-
         cam_ttl = self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR
         clock_addr = self.const.PLOGIC_4KHZ_CLOCK_ADDR
         cmd = f"CCB X={cam_ttl} Y={clock_addr}"
         self._execute_tiger_serial_command(cmd)
+
+        # Optional: Delay before laser
+        delay_cycles = int(settings.delay_before_laser_ms * self.const.PULSES_PER_MS)
+        self._execute_tiger_serial_command("CCA Y=13")
+        self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
+        self._execute_tiger_serial_command(
+            f"CCB X={self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR} Y={clock_addr}"
+        )
+
+        # Optional: Delay before camera
+        delay_cycles = int(settings.delay_before_camera_ms * self.const.PULSES_PER_MS)
+        self._execute_tiger_serial_command("CCA Y=13")
+        self._execute_tiger_serial_command(f"CCA Z={delay_cycles}")
+        self._execute_tiger_serial_command(
+            f"CCB X={self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR} Y={clock_addr}"
+        )
 
     def _configure_spim_scan(self, settings: AcquisitionSettings):
         """Sets all SPIM properties on the Tiger controller."""
         galvo = self.const.GALVO_A_LABEL
         piezo = self.const.Z_PIEZO_LABEL
         slope = self.const.SLICE_CALIBRATION_SLOPE_UM_PER_DEG
+
         if abs(slope) < 1e-9:
             raise ValueError("Slice calibration slope cannot be zero.")
 
@@ -116,7 +139,7 @@ class HardwareController:
         piezo_travel_um = (settings.num_slices - 1) * settings.step_size_um
         galvo_amplitude_deg = piezo_travel_um / slope
 
-        # Set Galvo properties
+        # Galvo Setup
         self._set_property(galvo, "SPIMNumSlices", num_slices_ctrl)
         self._set_property(
             galvo, "SingleAxisYAmplitude(deg)", round(galvo_amplitude_deg, 4)
@@ -153,7 +176,7 @@ class HardwareController:
         )
         self._set_property(galvo, "SingleAxisXOffset(deg)", self.const.SHEET_OFFSET_DEG)
 
-        # Set Piezo properties
+        # Piezo Setup
         self._set_property(piezo, "SingleAxisAmplitude(um)", 0.0)
         self._set_property(piezo, "SingleAxisOffset(um)", settings.piezo_center_um)
         self._set_property(piezo, "SPIMNumSlices", num_slices_ctrl)
@@ -181,8 +204,6 @@ class HardwareController:
         )
         self.find_and_set_trigger_mode("Internal Trigger")
 
-    # --- Live Scan & Navigation Methods ---
-
     def start_live_scan(self, exposure_ms: float):
         """Starts a continuous 'live' camera acquisition."""
         print(f"Starting live scan with {exposure_ms}ms exposure.")
@@ -200,7 +221,7 @@ class HardwareController:
         return self.mmc.getPosition(device_label)
 
     def set_position(self, device_label: str, position: float):
-        """Moves a 1D stage to an absolute position and waits for it to arrive."""
+        """Moves a 1D stage to an absolute position."""
         print(f"Moving {device_label} to {position}...")
         self.mmc.setPosition(device_label, position)
         self.mmc.waitForDevice(device_label)
@@ -231,6 +252,7 @@ class HardwareController:
             positions["Z-Piezo"] = 0.0
             positions["Z-Stage"] = 0.0
             positions["Filter-Z"] = 0.0
+
         return positions
 
     def start_jog(self, device_label: str, speed_microns_per_sec: float):
@@ -259,7 +281,6 @@ class HardwareController:
             except Exception as e:
                 print(f"Warn: Could not stop stage '{stage_label}': {e}")
 
-    # --- Utility Methods ---
     def get_pixel_size_um(self) -> float:
         """Returns the camera pixel size from Micro-Manager."""
         try:
@@ -272,12 +293,15 @@ class HardwareController:
         """Sets the camera trigger mode."""
         if self.is_demo:
             return True
+
         cam = self.const.CAMERA_A_LABEL
         if not self.mmc.hasProperty(cam, "TriggerMode"):
-            return True
+            return False
+
         allowed = self.mmc.getAllowedPropertyValues(cam, "TriggerMode")
         if mode in allowed:
             self._set_property(cam, "TriggerMode", mode)
             return True
+
         print(f"Warn: Mode '{mode}' not supported. Allowed: {allowed}")
         return False
