@@ -8,6 +8,7 @@ from datetime import datetime
 import numpy as np
 from magicgui import magicgui
 from pymmcore_plus.mda.handlers import OMETiffWriter
+from pymmcore_plus.metadata import summary_metadata
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -325,7 +326,8 @@ class AcquisitionGUI(QMainWindow):
                     sequence = self._create_mda_sequence(num_slices)
                     writer = self._setup_writer(t_point, params)
                     if writer:
-                        writer.sequenceStarted(sequence)
+                        summary_meta = summary_metadata(mmc, mda_sequence=sequence)
+                        writer.sequenceStarted(sequence, summary_meta)
 
                     mmc.startSequenceAcquisition(num_slices, 0, True)
                     trigger_slice_scan_acquisition()
@@ -338,14 +340,15 @@ class AcquisitionGUI(QMainWindow):
                             tagged_img = mmc.popNextTaggedImage()
                             popped_images += 1
 
+                            # CORRECTED: Create the event without metadata, as it's frozen.
                             event = MDAEvent(
-                                index={"t": t_point, "z": popped_images - 1},  # type: ignore
-                                metadata=tagged_img.tags,
+                                index={"t": t_point, "z": popped_images - 1}  # type: ignore
                             )
 
                             self.signals.frame_ready.emit(tagged_img.pix, event)
 
                             if writer:
+                                # Pass metadata as the separate, third argument.
                                 writer.frameReady(
                                     tagged_img.pix,
                                     event,
@@ -392,19 +395,14 @@ class AcquisitionGUI(QMainWindow):
             return OMETiffWriter(filepath)
 
         def _wait_for_interval(self, params: dict, start_time: float):
-            """
-            Wait for the specified interval, but in an interruptible way.
-            """
             user_interval = params["time_interval_s"]
             wait_time = 0 if params["minimal_interval"] else max(0, user_interval - (time.monotonic() - start_time))
 
-            # CORRECTED: Instead of one long sleep, we sleep in short chunks
-            # and check for cancellation in between.
             wait_start = time.monotonic()
             while time.monotonic() - wait_start < wait_time:
                 if self.gui.cancel_requested:
-                    break  # Exit the wait if cancellation is requested
+                    break
 
                 remaining = wait_time - (time.monotonic() - wait_start)
                 self.signals.status.emit(f"Waiting {remaining:.1f}s for next time point...")
-                time.sleep(0.1)  # Sleep in 100ms chunks
+                time.sleep(0.1)

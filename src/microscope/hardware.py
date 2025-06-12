@@ -99,9 +99,7 @@ class HardwareController:
 
         galvo = self.const.GALVO_A_LABEL
         self._set_property(galvo, "SPIMNumSlices", settings.num_slices)
-        self._set_property(
-            galvo, "SingleAxisYAmplitude(deg)", round(galvo_amplitude, 4)
-        )
+        self._set_property(galvo, "SingleAxisYAmplitude(deg)", round(galvo_amplitude, 4))
         self._set_property(galvo, "SingleAxisYOffset(deg)", round(galvo_center, 4))
 
         piezo = self.const.PIEZO_A_LABEL

@@ -70,10 +70,7 @@ class AcquisitionEngine(QObject):
                     break
 
                 current_time_point = t + 1
-                self.status_updated.emit(
-                    f"Starting Time Point {current_time_point}/"
-                    f"{self.settings.time_points}..."
-                )
+                self.status_updated.emit(f"Starting Time Point {current_time_point}/{self.settings.time_points}...")
                 volume_start_time = time.monotonic()
                 self.current_volume_images.clear()
 
@@ -91,9 +88,7 @@ class AcquisitionEngine(QObject):
                 volume_duration = time.monotonic() - volume_start_time
                 if current_time_point < self.settings.time_points:
                     delay = self._calculate_inter_volume_delay(volume_duration)
-                    self.status_updated.emit(
-                        f"Waiting {delay:.1f}s for next time point..."
-                    )
+                    self.status_updated.emit(f"Waiting {delay:.1f}s for next time point...")
                     time.sleep(delay)
 
         except Exception as e:
@@ -120,9 +115,7 @@ class AcquisitionEngine(QObject):
             if self.hw.mmc.getRemainingImageCount() > 0:
                 tagged_img = self.hw.mmc.popNextTaggedImage()
                 images_acquired += 1
-                img = tagged_img.pix.reshape(
-                    self.hw.mmc.getImageHeight(), self.hw.mmc.getImageWidth()
-                )
+                img = tagged_img.pix.reshape(self.hw.mmc.getImageHeight(), self.hw.mmc.getImageWidth())
                 self.new_image_ready.emit(img)
                 if self.settings.should_save:
                     self.current_volume_images.append(img)
