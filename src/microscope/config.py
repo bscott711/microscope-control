@@ -6,7 +6,6 @@ from dataclasses import dataclass
 USE_DEMO_CONFIG = os.environ.get("MICROSCOPE_DEMO") in ("1", "true", "True")
 
 
-# --- Global Constants and Configuration ---
 @dataclass
 class AcquisitionSettings:
     """Stores all user-configurable acquisition parameters."""
@@ -41,21 +40,23 @@ class HardwareConstants:
     plogic_label: str = "PLogic:E:36"
     tiger_comm_hub_label: str = "TigerCommHub"
 
-    # PLogic addresses used for triggering
+    # PLogic addresses for physical TTL lines
     plogic_camera_trigger_ttl_addr: int = 44
     plogic_laser_trigger_ttl_addr: int = 45
     plogic_galvo_trigger_ttl_addr: int = 43
-    plogic_4khz_clock_addr: int = 192
-    # NEW: Address for the galvo's own line clock
-    plogic_galvo_line_clock_addr: int = 33
+    plogic_clock_source_addr: int = 192  # Internal 4kHz clock
 
-    # Calibration
+    # PLogic Cell Assignments (from diSPIM example)
+    acquisition_flag_cell: int = 1
+    laser_clock_source_cell: int = 2
+    laser_counter_cell_1: int = 3
+    laser_counter_cell_2: int = 4  # Output of counter 1
+    laser_on_cell: int = 10
+    camera_delay_cell: int = 12
+
+    # Calibration & Timing
     slice_calibration_slope_um_per_deg: float = 100.0
     slice_calibration_offset_um: float = 0.0
-
-    # Timing Parameters
-    # We assume the galvo line clock runs at 4kHz for a 1ms scan time,
-    # so pulses_per_ms remains valid.
     pulses_per_ms: float = 4.0
     delay_before_scan_ms: float = 0.0
     line_scans_per_slice: int = 1

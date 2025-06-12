@@ -2,7 +2,7 @@
 import os
 import time
 import traceback
-from typing import Optional
+from typing import Any, Optional  # CORRECTED: Imported 'Any'
 
 from pymmcore_plus import CMMCorePlus
 
@@ -12,8 +12,8 @@ mmc = CMMCorePlus.instance()
 
 
 def _execute_tiger_serial_command(command_string: str):
+    print(f"SERIAL COMMAND: {command_string}")
     if USE_DEMO_CONFIG:
-        print(f"DEMO MODE: Skipping serial command: {command_string}")
         return
     if HW.tiger_comm_hub_label not in mmc.getLoadedDevices() or not mmc.hasProperty(
         HW.tiger_comm_hub_label, "SerialCommand"
@@ -32,7 +32,8 @@ def _execute_tiger_serial_command(command_string: str):
     time.sleep(0.02)
 
 
-def set_property(device_label: str, property_name: str, value):
+# CORRECTED: The type hint for a value of any type is `Any`, not the function `any`.
+def set_property(device_label: str, property_name: str, value: Any):
     if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, property_name):
         if mmc.getProperty(device_label, property_name) != str(value):
             mmc.setProperty(device_label, property_name, value)
@@ -43,57 +44,56 @@ def set_property(device_label: str, property_name: str, value):
 
 def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
     """
-    Configures the PLogic card using a robust multi-cell architecture.
-    This separates delay logic from pulse generation for reliability.
+    Configures the PLogic card based on the ASI diSPIM plugin logic.
     """
     plogic_addr = HW.plogic_label[-2:]
     galvo_trigger = HW.plogic_galvo_trigger_ttl_addr
-    clock = HW.plogic_4khz_clock_addr
+    clock = HW.plogic_clock_source_addr
 
-    # Cell assignments for logic functions
-    laser_pulse_cell = 10
-    laser_delay_cell = 11
-    camera_delay_cell = 12
-
-    # --- Clear PLogic card to ensure a clean slate ---
-    # RM F clears all cell's connections, Z sets all cell types/data to 0.
+    # --- Clear PLogic card ---
     _execute_tiger_serial_command(f"{plogic_addr}RM F")
     _execute_tiger_serial_command(f"{plogic_addr}RM Z")
 
-    # --- Laser Trigger Logic ---
-    # 1. Create a delayed trigger for the laser
-    _execute_tiger_serial_command(f"{plogic_addr}M E={laser_delay_cell}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=13")  # One-shot DELAY
-    delay_cycles = int(settings.delay_before_laser_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={galvo_trigger} Y={clock}")
+    # --- Program Laser State Machine ---
+    # Cell 1: Acquisition Flag (SR flip-flop) -> SET by galvo, RESET by counter done
+    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.acquisition_flag_cell}")
+    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=6")
+    _execute_tiger_serial_command(f"{plogic_addr}CCB X={galvo_trigger} Y={HW.laser_counter_cell_2}")
 
-    # 2. Create the final laser pulse, triggered by the delay cell
-    _execute_tiger_serial_command(f"{plogic_addr}M E={laser_pulse_cell}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=15")  # One-shot PULSE
-    duration_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Z={duration_cycles}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={laser_delay_cell} Y={clock}")
+    # Cell 2: Gated Clock -> Passes clock only when acquisition flag is high
+    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.laser_clock_source_cell}")
+    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")
+    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.acquisition_flag_cell} Y={clock}")
 
-    # 3. Route the generated pulse to the physical laser output TTL
-    _execute_tiger_serial_command(f"TTL X={HW.plogic_laser_trigger_ttl_addr} Y=9")
+    # Cell 3 & 4: Laser Counter -> Counts pulses from gated clock
+    pulse_duration_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
+    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.laser_counter_cell_1}")
+    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=11")
+    _execute_tiger_serial_command(f"{plogic_addr}CCA Z={pulse_duration_cycles}")
+    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.laser_clock_source_cell} Y={HW.acquisition_flag_cell}")
+
+    # Cell 10: Laser On Signal -> HIGH when Acq Flag is ON and Counter is NOT done
+    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.laser_on_cell}")
+    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")
+    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.acquisition_flag_cell} Y={128 + HW.laser_counter_cell_1}")
+
+    # Route Laser On signal to the physical TTL output port
+    _execute_tiger_serial_command(f"TTL X={HW.plogic_laser_trigger_ttl_addr} Y=8")
     _execute_tiger_serial_command(f"{plogic_addr}M E={HW.plogic_laser_trigger_ttl_addr}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")  # Buffer gate
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={laser_pulse_cell}")
+    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")
+    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.laser_on_cell}")
 
-    # --- Camera Trigger Logic ---
-    # 1. Create a delayed trigger for the camera
-    _execute_tiger_serial_command(f"{plogic_addr}M E={camera_delay_cell}")
+    # --- Program Camera Trigger Logic ---
+    _execute_tiger_serial_command(f"TTL X={HW.plogic_camera_trigger_ttl_addr} Y=8")
+    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.camera_delay_cell}")
     _execute_tiger_serial_command(f"{plogic_addr}CCA Y=13")  # One-shot DELAY
     delay_cycles = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
     _execute_tiger_serial_command(f"{plogic_addr}CCA Z={delay_cycles}")
     _execute_tiger_serial_command(f"{plogic_addr}CCB X={galvo_trigger} Y={clock}")
-
-    # 2. Route the camera trigger to the physical camera output TTL
-    _execute_tiger_serial_command(f"TTL X={HW.plogic_camera_trigger_ttl_addr} Y=9")
+    # Route delayed trigger to physical camera output
     _execute_tiger_serial_command(f"{plogic_addr}M E={HW.plogic_camera_trigger_ttl_addr}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")  # Buffer gate
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={camera_delay_cell}")
+    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")
+    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.camera_delay_cell}")
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -134,7 +134,6 @@ def configure_devices_for_slice_scan(
         "SPIMAlternateDirectionsEnable",
         "Yes" if HW.scan_opposite_directions else "No",
     )
-    # CORRECTED: The scan duration must match the camera exposure time.
     set_property(HW.galvo_a_label, "SPIMScanDuration(ms)", settings.camera_exposure_ms)
     set_property(HW.galvo_a_label, "SingleAxisYAmplitude(deg)", galvo_amplitude_deg)
     set_property(HW.galvo_a_label, "SingleAxisYOffset(deg)", galvo_center_deg)
