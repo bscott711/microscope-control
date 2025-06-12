@@ -80,6 +80,7 @@ class AcquisitionGUI(QMainWindow):
         self.setMinimumSize(600, 700)
 
         self.acquisition_in_progress = False
+        self.cancel_requested = False  # Initialize cancellation flag
         self.pixel_size_um = 1.0
 
         self._create_main_widgets()
@@ -238,6 +239,7 @@ class AcquisitionGUI(QMainWindow):
             self.statusBar().showMessage("Warning: Could not get pixel size.", 3000)
 
         self._set_controls_enabled(False)
+        self.cancel_requested = False  # Reset the flag at the start of an acquisition
 
         self.acquisition_thread = QThread()
         self.worker = self.AcquisitionWorker(self)
@@ -257,6 +259,7 @@ class AcquisitionGUI(QMainWindow):
     def _request_cancel(self):
         if self.acquisition_in_progress:
             self.statusBar().showMessage("Cancellation requested...")
+            self.cancel_requested = True  # CORRECTED: Set the flag
             mmc.stopSequenceAcquisition()
 
     def _set_controls_enabled(self, enabled: bool):
@@ -269,12 +272,14 @@ class AcquisitionGUI(QMainWindow):
 
     @Slot()
     def _finish_time_series(self):
-        status = "Acquisition finished."
+        # CORRECTED: Base the final status on the cancellation flag
+        status = "Cancelled" if self.cancel_requested else "Acquisition finished."
+        self.statusBar().showMessage(status, 5000)
+
+        # Ensure the sequence is stopped if it's still running (e.g., due to cancel)
         if mmc.isSequenceRunning():
             mmc.stopSequenceAcquisition()
-            status = "Cancelled"
 
-        self.statusBar().showMessage(status, 5000)
         self._set_controls_enabled(True)
         final_cleanup(self.settings)
         self.hw_interface.find_and_set_trigger_mode(self.hw_interface.camera1, ["Internal", "Internal Trigger"])
@@ -305,7 +310,8 @@ class AcquisitionGUI(QMainWindow):
                 mmc.setCameraDevice(self.gui.hw_interface.camera1)
 
                 for t_point in range(params["num_time_points"]):
-                    if not self.gui.acquisition_in_progress:
+                    # CORRECTED: Check for cancellation at the start of each time point
+                    if self.gui.cancel_requested:
                         break
 
                     self.signals.status.emit(f"Acquiring Time Point {t_point + 1}/{params['num_time_points']}")
@@ -319,8 +325,6 @@ class AcquisitionGUI(QMainWindow):
                     configure_devices_for_slice_scan(self.gui.settings, galvo_amp, galvo_center, num_slices)
                     mmc.setExposure(self.gui.settings.camera_exposure_ms)
 
-                    # CORRECTED: The sequence must be created *before* the writer
-                    # is set up, so it can be passed to the writer if needed.
                     sequence = self._create_mda_sequence(num_slices)
                     writer = self._setup_writer(t_point, params)
                     if writer:
@@ -331,26 +335,22 @@ class AcquisitionGUI(QMainWindow):
 
                     popped_images = 0
                     while mmc.isSequenceRunning() or mmc.getRemainingImageCount() > 0:
-                        if not self.gui.acquisition_in_progress:
+                        # CORRECTED: Check for cancellation within the polling loop
+                        if self.gui.cancel_requested:
                             break
                         if mmc.getRemainingImageCount() > 0:
                             tagged_img = mmc.popNextTaggedImage()
                             popped_images += 1
 
-                            # Add type: ignore to suppress Pylance warning
                             event = MDAEvent(
-                                index={"t": t_point, "z": popped_images - 1},  # type: ignore
+                                index={"t": t_point, "z": popped_images - 1}, # type: ignore
                                 metadata=tagged_img.tags,
-                            )  # type: ignore
+                            )
 
                             self.signals.frame_ready.emit(tagged_img.pix, event)
 
                             if writer:
-                                writer.frameReady(
-                                    tagged_img.pix,
-                                    event,
-                                    tagged_img.tags,  # type: ignore
-                                )  # type: ignore
+                                writer.frameReady(tagged_img.pix, event, tagged_img.tags) # type: ignore
 
                             self.signals.status.emit(f"Time Point {t_point + 1} | Slice {popped_images}/{num_slices}")
                         else:
@@ -373,7 +373,7 @@ class AcquisitionGUI(QMainWindow):
             step_size = self.gui.settings.step_size_um
             z_range = (num_slices - 1) * step_size if num_slices > 1 else 0
             z_plan_dict = {"range": z_range, "step": step_size}
-            return MDASequence(z_plan=z_plan_dict)  # type: ignore
+            return MDASequence(z_plan=z_plan_dict) # type: ignore
 
         def _setup_writer(self, t_point: int, params: dict):
             if not params["should_save"]:
@@ -394,5 +394,7 @@ class AcquisitionGUI(QMainWindow):
         def _wait_for_interval(self, params: dict, start_time: float):
             user_interval = params["time_interval_s"]
             wait_time = 0 if params["minimal_interval"] else max(0, user_interval - (time.monotonic() - start_time))
-            self.signals.status.emit(f"Waiting {wait_time:.1f}s for next time point...")
-            time.sleep(wait_time)
+            # CORRECTED: Check for cancellation again before sleeping
+            if not self.gui.cancel_requested:
+                self.signals.status.emit(f"Waiting {wait_time:.1f}s for next time point...")
+                time.sleep(wait_time)
