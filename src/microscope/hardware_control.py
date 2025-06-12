@@ -12,15 +12,9 @@ mmc = CMMCorePlus.instance()
 
 
 def _execute_tiger_serial_command(command_string: str):
-    """
-    Executes a serial command on the TigerCommHub.
-
-    In demo mode, it will simply print the command instead of executing it.
-    """
     if USE_DEMO_CONFIG:
         print(f"DEMO MODE: Skipping serial command: {command_string}")
         return
-
     if HW.tiger_comm_hub_label not in mmc.getLoadedDevices() or not mmc.hasProperty(
         HW.tiger_comm_hub_label, "SerialCommand"
     ):
@@ -29,13 +23,10 @@ def _execute_tiger_serial_command(command_string: str):
             "Device or 'SerialCommand' property not found."
         )
         return
-
     original_setting = mmc.getProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange")
     if original_setting == "Yes":
         mmc.setProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange", "No")
-
     mmc.setProperty(HW.tiger_comm_hub_label, "SerialCommand", command_string)
-
     if original_setting == "Yes":
         mmc.setProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange", "Yes")
     time.sleep(0.02)
@@ -50,7 +41,6 @@ def set_property(device_label: str, property_name: str, value):
             print(f"Warning: Cannot set '{property_name}' for device '{device_label}'. Device or property not found.")
 
 
-# CORRECTED: This function now uses the more robust PULSE (PL) command for the PLogic card.
 def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
     """
     Configures the PLogic card to generate a fixed-duration pulse for the laser
@@ -58,29 +48,36 @@ def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
     """
     plogic_addr = HW.plogic_label[-2:]
 
-    # Calculate the number of 4kHz clock cycles for the laser pulse duration.
+    # --- Laser Trigger Setup ---
+    # Set the laser TTL output line to 'PLogic' mode.
+    _execute_tiger_serial_command(f"TTL X={HW.plogic_laser_trigger_ttl_addr} Y=9")
+
     pulse_duration_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
 
     # Use the PULSE (PL) command for the laser trigger.
-    # This command is designed for re-triggerable events.
-    # Y = Input line (from galvo), Z = Clock line, X = Output line, W = Pulse Width
+    # CORRECTED: The clock source (Z) is now the galvo's line clock.
     pulse_command = (
         f"{plogic_addr}PL Y={HW.plogic_galvo_trigger_ttl_addr} "
-        f"Z={HW.plogic_4khz_clock_addr} "
+        f"Z={HW.plogic_galvo_line_clock_addr} "
         f"X={HW.plogic_laser_trigger_ttl_addr} "
         f"W={pulse_duration_cycles}"
     )
     _execute_tiger_serial_command(pulse_command)
 
-    # The camera trigger can remain a delayed pulse/latch, as it's a simple trigger.
+    # --- Camera Trigger Setup ---
+    # Set the camera TTL output line to 'PLogic' mode.
+    _execute_tiger_serial_command(f"TTL X={HW.plogic_camera_trigger_ttl_addr} Y=9")
+
     camera_delay_cycles = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
-    camera_delay_command = (
-        f"{plogic_addr}DL L={camera_delay_cycles} "
+    # Use the DELAYED PULSE (DP) command for the camera trigger.
+    # CORRECTED: The clock source (Z) is now the galvo's line clock.
+    camera_pulse_command = (
+        f"{plogic_addr}DP Y={HW.plogic_galvo_trigger_ttl_addr} "
+        f"Z={HW.plogic_galvo_line_clock_addr} "
         f"X={HW.plogic_camera_trigger_ttl_addr} "
-        f"Y={HW.plogic_galvo_trigger_ttl_addr} "
-        f"Z={HW.plogic_4khz_clock_addr}"
+        f"D={camera_delay_cycles} W=1"
     )
-    _execute_tiger_serial_command(camera_delay_command)
+    _execute_tiger_serial_command(camera_pulse_command)
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -175,7 +172,6 @@ class HardwareInterface:
 
     def _initialize_hardware(self):
         print("Initializing HardwareInterface...")
-
         if USE_DEMO_CONFIG:
             try:
                 _load_demo_config()
@@ -184,10 +180,8 @@ class HardwareInterface:
                 print(f"CRITICAL Error loading DEMO configuration: {e}")
                 traceback.print_exc()
                 raise
-
         if not self.config_path or not os.path.exists(self.config_path):
             raise FileNotFoundError(f"Hardware config file not found at '{self.config_path}'")
-
         print(f"Attempting to load configuration: '{self.config_path}'")
         try:
             mmc.loadSystemConfiguration(self.config_path)

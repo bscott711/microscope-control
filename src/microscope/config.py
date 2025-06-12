@@ -7,7 +7,6 @@ USE_DEMO_CONFIG = os.environ.get("MICROSCOPE_DEMO") in ("1", "true", "True")
 
 
 # --- Global Constants and Configuration ---
-# ... (AcquisitionSettings dataclass is unchanged) ...
 @dataclass
 class AcquisitionSettings:
     """Stores all user-configurable acquisition parameters."""
@@ -33,34 +32,31 @@ class AcquisitionSettings:
 class HardwareConstants:
     """Stores fixed hardware configuration and constants."""
 
-    # UPDATED: In demo mode, this path will be ignored in favor of the
-    # programmatic configuration.
     cfg_path: str = "" if USE_DEMO_CONFIG else "hardware_profiles/20250523-OPM.cfg"
 
-    # ... (the rest of the file is unchanged) ...
-    # Device labels (these remain the same as they are mapped in both configs)
+    # Device labels
     galvo_a_label: str = "Scanner:AB:33"
     piezo_a_label: str = "PiezoStage:P:34"
     camera_a_label: str = "Camera-1"
     plogic_label: str = "PLogic:E:36"
     tiger_comm_hub_label: str = "TigerCommHub"
 
-    # PLogic addresses and presets
+    # PLogic addresses used for triggering
     plogic_camera_trigger_ttl_addr: int = 44
     plogic_laser_trigger_ttl_addr: int = 45
     plogic_galvo_trigger_ttl_addr: int = 43
     plogic_4khz_clock_addr: int = 192
-    plogic_laser_on_cell: int = 10
-    plogic_laser_preset_num: int = 5
-    plogic_delay_before_laser_cell: int = 11
-    plogic_delay_before_camera_cell: int = 12
-    pulses_per_ms: float = 4.0
+    # NEW: Address for the galvo's own line clock
+    plogic_galvo_line_clock_addr: int = 33
 
     # Calibration
     slice_calibration_slope_um_per_deg: float = 100.0
     slice_calibration_offset_um: float = 0.0
 
     # Timing Parameters
+    # We assume the galvo line clock runs at 4kHz for a 1ms scan time,
+    # so pulses_per_ms remains valid.
+    pulses_per_ms: float = 4.0
     delay_before_scan_ms: float = 0.0
     line_scans_per_slice: int = 1
     line_scan_duration_ms: float = 1.0
