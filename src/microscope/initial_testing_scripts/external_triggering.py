@@ -1,9 +1,8 @@
 from pymmcore_plus import CMMCorePlus, DeviceType  # Import DeviceType directly
-from typing import Optional, Dict, Tuple, Any, Union
+from typing import Optional, Dict, Any, Union
 import traceback
 import time  # Added for time.sleep in set_crisp_state and movement tests
 import os  # For path joining if needed
-import tifffile  # Added for saving images
 import numpy as np  # Added for stacking multi-camera images
 
 # Initialize global core instance

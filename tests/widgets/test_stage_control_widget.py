@@ -1,7 +1,7 @@
+import os
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
-import sys
-import os
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
@@ -10,16 +10,15 @@ mock_napari = MagicMock()
 sys.modules["napari"] = mock_napari
 sys.modules["napari.viewer"] = MagicMock()
 
+from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QApplication,
-    QLineEdit,
     QCheckBox,
-    QPushButton,
-    QLabel,
-    QWidget,
     QGroupBox,
+    QLabel,
+    QLineEdit,
+    QPushButton,
 )
-from qtpy.QtCore import Qt
 
 try:
     from src.microscope_control.hardware.stage import Stage
@@ -49,9 +48,7 @@ class TestStageControlWidgetInitialization(unittest.TestCase):
     def setUp(self):
         self.mock_viewer = MagicMock(name="MockViewer")
 
-        self.stage_patcher = patch(
-            "src.microscope_control.widgets.stage_control_widget.Stage", spec=Stage
-        )
+        self.stage_patcher = patch("src.microscope_control.widgets.stage_control_widget.Stage", spec=Stage)
         self.MockStageClass = self.stage_patcher.start()
 
         self.mock_stage_instance = MagicMock(spec=Stage)
@@ -94,9 +91,7 @@ class TestStageControlWidgetInitialization(unittest.TestCase):
         self.assertTrue(widget_init_test.initialize_button.isEnabled())
         self.assertFalse(widget_init_test.disconnect_button.isEnabled())
         self.assertFalse(widget_init_test.movement_controls_group.isEnabled())
-        self.assertEqual(
-            widget_init_test.status_label.text(), "Status: Not Initialized"
-        )
+        self.assertEqual(widget_init_test.status_label.text(), "Status: Not Initialized")
         self.assertTrue(widget_init_test.mock_hw_checkbox.isChecked())
         self.assertFalse(widget_init_test.mm_config_file_input.isEnabled())
 
@@ -119,10 +114,7 @@ class TestStageControlWidgetInitialization(unittest.TestCase):
         )
         self.assertIs(self.widget.stage, self.mock_stage_instance)
         # Check for the specific success message part
-        self.assertTrue(
-            "Status: Initialized (Real HW: RealStage)"
-            in self.widget.status_label.setText.call_args[0][0]
-        )
+        self.assertTrue("Status: Initialized (Real HW: RealStage)" in self.widget.status_label.setText.call_args[0][0])
         self.widget.movement_controls_group.setEnabled.assert_called_with(True)
         self.widget.disconnect_button.setEnabled.assert_called_with(True)
         self.widget.initialize_button.setEnabled.assert_called_with(False)
@@ -148,8 +140,7 @@ class TestStageControlWidgetInitialization(unittest.TestCase):
         )
         self.assertIs(self.widget.stage, self.mock_stage_instance)
         self.assertTrue(
-            "Status: Initialized (Mock: MockStageLabel)"
-            in self.widget.status_label.setText.call_args[0][0]
+            "Status: Initialized (Mock: MockStageLabel)" in self.widget.status_label.setText.call_args[0][0]
         )
         self.widget.movement_controls_group.setEnabled.assert_called_with(True)
         self.widget.disconnect_button.setEnabled.assert_called_with(True)
@@ -180,9 +171,7 @@ class TestStageControlWidgetInitialization(unittest.TestCase):
     def test_on_initialize_stage_failure_runtime_error(self):
         self.widget.mock_hw_checkbox.isChecked.return_value = False
         self.widget.mock_hw_checkbox.checkState.return_value = Qt.Unchecked
-        self.widget.mm_config_file_input.text.return_value = (
-            "bad.cfg"  # Ensure it attempts real init
-        )
+        self.widget.mm_config_file_input.text.return_value = "bad.cfg"  # Ensure it attempts real init
         self.widget.stage_device_label_input.text.return_value = "ErrorStage"
 
         self.MockStageClass.side_effect = RuntimeError("Test Stage Init Error")
@@ -215,9 +204,7 @@ class TestStageControlWidgetInitialization(unittest.TestCase):
     def test_on_disconnect_stage(self):
         # Simulate initialized state (real hardware)
         self.widget.stage = self.mock_stage_instance
-        self.mock_stage_instance.stage_device_label = (
-            "PreviouslyRealStage"  # Set for the print
-        )
+        self.mock_stage_instance.stage_device_label = "PreviouslyRealStage"  # Set for the print
         self.widget.initialize_button.setEnabled(False)
         self.widget.disconnect_button.setEnabled(True)
         self.widget.movement_controls_group.setEnabled(True)

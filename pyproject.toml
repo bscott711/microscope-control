@@ -2,14 +2,13 @@
 name = "microscope-control"
 version = "0.1.0"
 dependencies = [
-  "pymmcore-plus[cli,io]>=0.1",
-  "useq-schema>=0.7",
-  "napari[pyqt6]>=0.6",
-  "magicgui>=0.5",
-  "numpy>=1.23",
-  "inputs>=0.5",
+  "pymmcore-plus[cli,io]",
+  "numpy",
+  "tifffile",
+  "pillow",
+  "qtpy",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 authors = [
   { name = "Brandon Scott", email = "brandon.scott@sdsmt.edu" }
 ]
@@ -18,15 +17,44 @@ readme = "README.md"
 license = "MIT"
 
 [project.optional-dependencies]
+# Development dependencies, installed with `uv pip install -e .[dev]`
 dev = [
-    "pytest",
-    "sphinx",
-    "black",
-    "isort",
-    "mypy",
-    "ruff>=0.11",
+  "ruff",
 ]
+[project.scripts]
+# FIX: This now correctly points to the 'main' function inside the 'microscope' package.
+microscope-control = "microscope.__main__:main"
 
+
+# --- Tool Configuration ---
+
+[tool.setuptools.packages.find]
+# This tells setuptools to look for your package inside the 'src' directory
+where = ["src"]
+
+
+[tool.ruff]
+# Set the minimum Python version to target for linting.
+target-version = "py39"
+exclude = [
+  "initial_testing_scripts",
+  "docs",
+]
+line-length = 120
+
+[tool.ruff.lint]
+# Rules: https://docs.astral.sh/ruff/rules/
+# "F" - Pyflakes | "E" - pycodestyle Error | "W" - pycodestyle Warning
+# "I" - isort | "UP" - pyupgrade
+select = ["E", "F", "W", "I", "UP"]
+ignore = []
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+# Use double quotes for strings where possible.
+quote-style = "double"
 [project.urls]
 Homepage = "https://github.com/bscott711/microscope-control"
 

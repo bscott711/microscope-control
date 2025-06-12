@@ -1,12 +1,13 @@
-import unittest
-from unittest.mock import patch, MagicMock
-import sys
 import os
+import sys
+import unittest
+from unittest.mock import MagicMock, patch
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, project_root)
 
 from pymmcore_plus import CMMCorePlus, DeviceType
+
 from src.microscope_control.hardware.stage import Stage
 
 
@@ -14,14 +15,10 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
     """Tests for Stage when mock_hw=False, interacting with a mocked CMMCorePlus."""
 
     def setUp(self):
-        self.class_patcher = patch(
-            "src.microscope_control.hardware.stage.CMMCorePlus", spec=CMMCorePlus
-        )
+        self.class_patcher = patch("src.microscope_control.hardware.stage.CMMCorePlus", spec=CMMCorePlus)
         self.MockCMMCorePlusClass = self.class_patcher.start()
 
-        self.mock_core_instance = (
-            MagicMock()
-        )  # No spec for flexibility with inherited methods
+        self.mock_core_instance = MagicMock()  # No spec for flexibility with inherited methods
         self.MockCMMCorePlusClass.instance.return_value = self.mock_core_instance
 
         self.INITIAL_X_POS = 0.0
@@ -51,18 +48,14 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
         self.mock_core_instance.loadDevice.assert_called_once_with(
             self.stage_label, self.adapter_name, self.device_name_in_adapter
         )
-        self.mock_core_instance.initializeDevice.assert_called_once_with(
-            self.stage_label
-        )
+        self.mock_core_instance.initializeDevice.assert_called_once_with(self.stage_label)
         self.mock_core_instance.getXPosition.assert_called_with(self.stage_label)
         self.assertEqual(self.stage.get_position(), self.INITIAL_X_POS)
         self.assertFalse(self.stage.mock_hw)
 
     def test_initialization_device_already_loaded(self):
         self.class_patcher.stop()
-        local_class_patcher = patch(
-            "src.microscope_control.hardware.stage.CMMCorePlus", spec=CMMCorePlus
-        )
+        local_class_patcher = patch("src.microscope_control.hardware.stage.CMMCorePlus", spec=CMMCorePlus)
         MockCMMCorePlusClass_local = local_class_patcher.start()
         mock_core_local = MagicMock()
         MockCMMCorePlusClass_local.instance.return_value = mock_core_local
@@ -89,9 +82,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
 
     def test_initialization_load_device_fails_runtime_error(self):
         self.class_patcher.stop()
-        local_class_patcher = patch(
-            "src.microscope_control.hardware.stage.CMMCorePlus", spec=CMMCorePlus
-        )
+        local_class_patcher = patch("src.microscope_control.hardware.stage.CMMCorePlus", spec=CMMCorePlus)
         MockCMMCorePlusClass_local = local_class_patcher.start()
         mock_core_local = MagicMock()
         MockCMMCorePlusClass_local.instance.return_value = mock_core_local
@@ -114,9 +105,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
 
     def test_initialization_init_device_fails_runtime_error(self):
         self.class_patcher.stop()
-        local_class_patcher = patch(
-            "src.microscope_control.hardware.stage.CMMCorePlus", spec=CMMCorePlus
-        )
+        local_class_patcher = patch("src.microscope_control.hardware.stage.CMMCorePlus", spec=CMMCorePlus)
         MockCMMCorePlusClass_local = local_class_patcher.start()
         mock_core_local = MagicMock()
         MockCMMCorePlusClass_local.instance.return_value = mock_core_local
@@ -124,9 +113,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
         mock_core_local.getLoadedDevices.return_value = []
         mock_core_local.getDeviceType.return_value = DeviceType.XYStage
         mock_core_local.loadDevice.return_value = None
-        mock_core_local.initializeDevice.side_effect = RuntimeError(
-            "Failed to initialize"
-        )
+        mock_core_local.initializeDevice.side_effect = RuntimeError("Failed to initialize")
 
         stage = Stage(
             mm_config_file=self.config_file,
@@ -152,9 +139,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
     def test_get_position_hw_runtime_error(self):
         # Ensure _current_position has a known value before the error
         self.stage._current_position = 30.0
-        self.mock_core_instance.getXPosition.side_effect = RuntimeError(
-            "getXPosition error"
-        )
+        self.mock_core_instance.getXPosition.side_effect = RuntimeError("getXPosition error")
         pos = self.stage.get_position()
         self.assertAlmostEqual(pos, 30.0)
 
@@ -166,9 +151,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
             self.INITIAL_X_POS + 5.0,
         ]
         self.stage.move_step(5.0, "forward")
-        self.mock_core_instance.setXPosition.assert_called_once_with(
-            self.stage_label, self.INITIAL_X_POS + 5.0
-        )
+        self.mock_core_instance.setXPosition.assert_called_once_with(self.stage_label, self.INITIAL_X_POS + 5.0)
         self.mock_core_instance.waitForDevice.assert_called_once_with(self.stage_label)
         self.assertEqual(self.mock_core_instance.getXPosition.call_count, 2)
         self.assertAlmostEqual(self.stage.get_position(), self.INITIAL_X_POS + 5.0)
@@ -181,9 +164,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
             self.INITIAL_X_POS - 3.0,
         ]
         self.stage.move_step(3.0, "backward")
-        self.mock_core_instance.setXPosition.assert_called_once_with(
-            self.stage_label, self.INITIAL_X_POS - 3.0
-        )
+        self.mock_core_instance.setXPosition.assert_called_once_with(self.stage_label, self.INITIAL_X_POS - 3.0)
         self.mock_core_instance.waitForDevice.assert_called_once_with(self.stage_label)
         self.assertEqual(self.mock_core_instance.getXPosition.call_count, 2)
         self.assertAlmostEqual(self.stage.get_position(), self.INITIAL_X_POS - 3.0)
@@ -195,9 +176,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
             self.INITIAL_X_POS,
             self.INITIAL_X_POS,
         ]
-        self.mock_core_instance.setXPosition.side_effect = RuntimeError(
-            "setXPosition error"
-        )
+        self.mock_core_instance.setXPosition.side_effect = RuntimeError("setXPosition error")
         self.stage.move_step(5.0, "forward")
         self.assertEqual(self.mock_core_instance.getXPosition.call_count, 2)
         self.assertAlmostEqual(self.stage._current_position, self.INITIAL_X_POS)
@@ -212,25 +191,17 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
             self.INITIAL_X_POS + expected_relative_move,
         ]
         self.stage.jog(jog_speed, "forward")
-        self.mock_core_instance.setRelativeXPosition.assert_called_once_with(
-            self.stage_label, expected_relative_move
-        )
+        self.mock_core_instance.setRelativeXPosition.assert_called_once_with(self.stage_label, expected_relative_move)
         self.mock_core_instance.waitForDevice.assert_called_once_with(self.stage_label)
-        self.assertEqual(
-            self.mock_core_instance.getXPosition.call_count, 1
-        )  # Called once in jog to update cache
+        self.assertEqual(self.mock_core_instance.getXPosition.call_count, 1)  # Called once in jog to update cache
         self.assertAlmostEqual(
             self.stage.get_position(), self.INITIAL_X_POS + expected_relative_move
         )  # Calls getXPosition again
 
     def test_jog_hw_runtime_error_on_set_relative(self):
         self.mock_core_instance.getXPosition.reset_mock()
-        self.mock_core_instance.getXPosition.return_value = (
-            self.INITIAL_X_POS
-        )  # For the except block
-        self.mock_core_instance.setRelativeXPosition.side_effect = RuntimeError(
-            "setRelativeXPosition error"
-        )
+        self.mock_core_instance.getXPosition.return_value = self.INITIAL_X_POS  # For the except block
+        self.mock_core_instance.setRelativeXPosition.side_effect = RuntimeError("setRelativeXPosition error")
         self.stage.jog(10.0, "forward")
         self.assertFalse(self.stage._is_jogging)
         self.mock_core_instance.getXPosition.assert_called_once()
@@ -258,9 +229,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
     def test_stop_hw_runtime_error(self):
         self.stage._is_jogging = True
         self.mock_core_instance.getXPosition.reset_mock()
-        self.mock_core_instance.getXPosition.return_value = (
-            self.INITIAL_X_POS
-        )  # For except block in stop
+        self.mock_core_instance.getXPosition.return_value = self.INITIAL_X_POS  # For except block in stop
         self.mock_core_instance.stop.side_effect = RuntimeError("stop error")
         self.stage.stop()
         self.assertFalse(self.stage._is_jogging)
@@ -282,9 +251,7 @@ class TestStageWithRealHardwareAccess(unittest.TestCase):
         self.stage.move_step(5.0, "forward")
         self.mock_core_instance.stop.assert_called_once_with(self.stage_label)
         self.assertFalse(self.stage._is_jogging)
-        self.mock_core_instance.setXPosition.assert_called_with(
-            self.stage_label, pos_after_move
-        )
+        self.mock_core_instance.setXPosition.assert_called_with(self.stage_label, pos_after_move)
         self.assertEqual(self.mock_core_instance.getXPosition.call_count, 3)
         self.assertAlmostEqual(self.stage.get_position(), pos_after_move)
 
