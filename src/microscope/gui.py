@@ -319,6 +319,8 @@ class AcquisitionGUI(QMainWindow):
                     configure_devices_for_slice_scan(self.gui.settings, galvo_amp, galvo_center, num_slices)
                     mmc.setExposure(self.gui.settings.camera_exposure_ms)
 
+                    # CORRECTED: The sequence must be created *before* the writer
+                    # is set up, so it can be passed to the writer if needed.
                     sequence = self._create_mda_sequence(num_slices)
                     writer = self._setup_writer(t_point, params)
                     if writer:
@@ -335,17 +337,20 @@ class AcquisitionGUI(QMainWindow):
                             tagged_img = mmc.popNextTaggedImage()
                             popped_images += 1
 
+                            # Add type: ignore to suppress Pylance warning
                             event = MDAEvent(
                                 index={"t": t_point, "z": popped_images - 1},  # type: ignore
                                 metadata=tagged_img.tags,
-                            )
+                            )  # type: ignore
 
                             self.signals.frame_ready.emit(tagged_img.pix, event)
 
                             if writer:
-                                # CORRECTED: The frameReady method requires the frame,
-                                # event, and metadata dictionary.
-                                writer.frameReady(tagged_img.pix, event, tagged_img.tags)  # type: ignore
+                                writer.frameReady(
+                                    tagged_img.pix,
+                                    event,
+                                    tagged_img.tags,  # type: ignore
+                                )  # type: ignore
 
                             self.signals.status.emit(f"Time Point {t_point + 1} | Slice {popped_images}/{num_slices}")
                         else:
@@ -373,6 +378,7 @@ class AcquisitionGUI(QMainWindow):
         def _setup_writer(self, t_point: int, params: dict):
             if not params["should_save"]:
                 return None
+
             save_dir = params["save_dir"]
             prefix = params["save_prefix"]
             if not save_dir or not prefix:
