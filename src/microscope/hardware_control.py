@@ -1,32 +1,59 @@
-# hardware_control.py
+# microscope/hardware_control.py
 import os
 import time
 import traceback
-from typing import Optional
+from typing import List, Optional
 
+from .config import AcquisitionSettings, HW, USE_DEMO_CONFIG
 from pymmcore_plus import CMMCorePlus
-
-from .config import HW, AcquisitionSettings
 
 mmc = CMMCorePlus.instance()
 
 
 def _execute_tiger_serial_command(command_string: str):
-    original_setting = mmc.getProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange")
+    """
+    Executes a serial command on the TigerCommHub.
+
+    In demo mode, it will simply print the command instead of executing it.
+    """
+    if USE_DEMO_CONFIG:
+        print(f"DEMO MODE: Skipping serial command: {command_string}")
+        return
+
+    if HW.tiger_comm_hub_label not in mmc.getLoadedDevices() or not mmc.hasProperty(
+        HW.tiger_comm_hub_label, "SerialCommand"
+    ):
+        print(
+            f"Warning: Cannot send serial commands to '{HW.tiger_comm_hub_label}'. "
+            "Device or 'SerialCommand' property not found."
+        )
+        return
+
+    original_setting = mmc.getProperty(
+        HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange"
+    )
     if original_setting == "Yes":
         mmc.setProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange", "No")
+
     mmc.setProperty(HW.tiger_comm_hub_label, "SerialCommand", command_string)
+
     if original_setting == "Yes":
         mmc.setProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange", "Yes")
     time.sleep(0.02)
 
 
 def set_property(device_label: str, property_name: str, value):
-    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, property_name):
+    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(
+        device_label, property_name
+    ):
         if mmc.getProperty(device_label, property_name) != str(value):
             mmc.setProperty(device_label, property_name, value)
     else:
-        print(f"Warning: Cannot set '{property_name}' for device '{device_label}'. Device or property not found.")
+        if not USE_DEMO_CONFIG:
+            print(
+                f"Warning: Cannot set '{property_name}' for device '{device_label}'. "
+                "Device or property not found."
+            )
 
 
 def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
@@ -36,17 +63,23 @@ def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
     _execute_tiger_serial_command("CCA Y=14")
     pulse_duration_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
     _execute_tiger_serial_command(f"CCA Z={pulse_duration_cycles}")
-    _execute_tiger_serial_command(f"CCB X={HW.plogic_camera_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
+    _execute_tiger_serial_command(
+        f"CCB X={HW.plogic_camera_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}"
+    )
     _execute_tiger_serial_command(f"M E={HW.plogic_delay_before_laser_cell}")
     _execute_tiger_serial_command("CCA Y=13")
     delay_cycles = int(settings.delay_before_laser_ms * HW.pulses_per_ms)
     _execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
+    _execute_tiger_serial_command(
+        f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}"
+    )
     _execute_tiger_serial_command(f"M E={HW.plogic_delay_before_camera_cell}")
     _execute_tiger_serial_command("CCA Y=13")
     delay_cycles = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
     _execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
+    _execute_tiger_serial_command(
+        f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}"
+    )
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -58,7 +91,9 @@ def calculate_galvo_parameters(settings: AcquisitionSettings):
         if num_slices_ctrl > 1:
             piezo_amplitude_um *= float(num_slices_ctrl) / (num_slices_ctrl - 1.0)
         num_slices_ctrl += 1
-    galvo_slice_amplitude_deg = piezo_amplitude_um / HW.slice_calibration_slope_um_per_deg
+    galvo_slice_amplitude_deg = (
+        piezo_amplitude_um / HW.slice_calibration_slope_um_per_deg
+    )
     galvo_slice_center_deg = (
         settings.piezo_center_um - HW.slice_calibration_offset_um
     ) / HW.slice_calibration_slope_um_per_deg
@@ -120,6 +155,23 @@ def final_cleanup(settings: AcquisitionSettings):
     set_property(HW.piezo_a_label, "SingleAxisOffset(um)", settings.piezo_center_um)
 
 
+def _load_demo_config():
+    """Programmatically load a demo configuration."""
+    print("Programmatically loading DEMO configuration...")
+    mmc.loadDevice(HW.camera_a_label, "DemoCamera", "DCam")
+    mmc.loadDevice(HW.piezo_a_label, "DemoCamera", "DStage")
+    mmc.loadDevice(HW.galvo_a_label, "DemoCamera", "DXYStage")
+    mmc.loadDevice(HW.tiger_comm_hub_label, "DemoCamera", "DShutter")
+    mmc.loadDevice(HW.plogic_label, "DemoCamera", "DShutter")
+    mmc.initializeAllDevices()
+
+    # CORRECTED: A pixel size "configuration" must be defined before setting
+    # the pixel size. The name of this configuration is then used to set the value.
+    # We will create a configuration named "px" as was done in the .cfg file.
+    mmc.definePixelSizeConfig("px")
+    mmc.setPixelSizeUm("px", 1.0)
+
+
 class HardwareInterface:
     def __init__(self, config_file_path: Optional[str] = None):
         self.config_path: Optional[str] = config_file_path
@@ -127,26 +179,26 @@ class HardwareInterface:
 
     def _initialize_hardware(self):
         print("Initializing HardwareInterface...")
-        current_config = mmc.systemConfigurationFile() or ""
-        target_config = self.config_path
-        if not target_config:
-            if HW.tiger_comm_hub_label in mmc.getLoadedDevices():
-                print(f"Using existing MMCore config: {current_config}")
+
+        if USE_DEMO_CONFIG:
+            try:
+                _load_demo_config()
                 return
-            raise FileNotFoundError("HardwareInterface requires a config_path, and no valid ASI config is loaded.")
-        if not os.path.isabs(target_config):
-            target_config = os.path.abspath(target_config)
-        if os.path.normcase(current_config) == os.path.normcase(target_config):
-            print(f"Target configuration '{target_config}' is already loaded.")
-            return
-        print(f"Attempting to load configuration: '{target_config}'")
+            except Exception as e:
+                print(f"CRITICAL Error loading DEMO configuration: {e}")
+                traceback.print_exc()
+                raise
+
+        if not self.config_path or not os.path.exists(self.config_path):
+            raise FileNotFoundError(
+                f"Hardware config file not found at '{self.config_path}'"
+            )
+
+        print(f"Attempting to load configuration: '{self.config_path}'")
         try:
-            mmc.loadSystemConfiguration(target_config)
-            if HW.tiger_comm_hub_label not in mmc.getLoadedDevices():
-                raise RuntimeError("Loaded config does not appear to contain an ASI TigerCommHub.")
-            print(f"Successfully loaded: {mmc.systemConfigurationFile()}")
+            mmc.loadSystemConfiguration(self.config_path)
         except Exception as e:
-            print(f"CRITICAL Error loading configuration '{target_config}': {e}")
+            print(f"CRITICAL Error loading configuration '{self.config_path}': {e}")
             traceback.print_exc()
             raise
 
@@ -154,7 +206,9 @@ class HardwareInterface:
     def camera1(self) -> str:
         return HW.camera_a_label
 
-    def find_and_set_trigger_mode(self, camera_label: str, desired_modes: list[str]) -> bool:
+    def find_and_set_trigger_mode(
+        self, camera_label: str, desired_modes: List[str]
+    ) -> bool:
         if camera_label not in mmc.getLoadedDevices():
             return False
         trigger_prop = "TriggerMode"
