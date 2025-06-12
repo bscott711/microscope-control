@@ -48,6 +48,9 @@ coverage.xml
 *.py,cover
 .hypothesis/
 
+# Initial testing scripts
+initial_testing_scripts/
+
 
 # Jupyter Notebook
 .ipynb_checkpoints

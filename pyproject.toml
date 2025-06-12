@@ -1,59 +1,69 @@
 # pyproject.toml
 
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
+# --- Core Project Metadata ---
 [project]
-# The name of your package inside the 'src' directory
-name = "microscope"
-version = "0.2.0.dev0"
-authors = [
-  { name="Brandon Scott", email="brandon.scott@sdsmt.edu" },
-]
-description = "A modular desktop application for controlling an ASI Tiger-based OPM."
+name = "microscope-control"
+version = "0.1.0.dev2"
+description = "OPM Control System"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.9"
+authors = [
+  { name = "Brandon Scott", email = "brandon.scott@sdsmt.edu" },
+]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering",
 ]
-# Runtime dependencies required to run the application
+
+# --- Dependencies ---
 dependencies = [
-    "pyside6",
+    # Core Microscope Control
     "pymmcore-plus[cli,io]",
-    "numpy",
-    "tifffile",
-    "pillow",
+
+    # GUI Framework
+    "pyside6",
     "qtpy",
+    "magicgui>=0.10.0",
+
+    # Data & Imaging
+    "numpy",
+    "pillow",
+    "tifffile",
 ]
 
 [project.optional-dependencies]
 # Development dependencies, installed with `uv pip install -e .[dev]`
-dev = [
-    "ruff",
-]
+dev = ["ruff"]
+
+# --- Entry Points & URLs ---
+[project.scripts]
+microscope-control = "microscope.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/bscott711/microscope-control"
 
-[project.scripts]
-# FIX: This now correctly points to the 'main' function inside the 'microscope' package.
-microscope-control = "microscope.__main__:main"
-
-
 # --- Tool Configuration ---
-
-[tool.setuptools.packages.find]
-# This tells setuptools to look for your package inside the 'src' directory
-where = ["src"]
-
+[tool.hatch.build.targets.wheel]
+# This explicitly tells Hatchling where to find the package,
+# resolving the auto-discovery mismatch.
+packages = ["src/microscope"]
 
 [tool.ruff]
 # Set the minimum Python version to target for linting.
 target-version = "py39"
+exclude = [
+    "initial_testing_scripts",
+    "docs",
+    "tests",
+]
+line-length = 120
 
 [tool.ruff.lint]
 # Rules: https://docs.astral.sh/ruff/rules/
@@ -61,6 +71,9 @@ target-version = "py39"
 # "I" - isort | "UP" - pyupgrade
 select = ["E", "F", "W", "I", "UP"]
 ignore = []
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
 
 [tool.ruff.format]
 # Use double quotes for strings where possible.
