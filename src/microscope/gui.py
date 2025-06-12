@@ -1,15 +1,26 @@
-# gui.py
+# microscope/gui.py
 import os
 import time
-import tkinter as tk
+import traceback
 from datetime import datetime
-from tkinter import filedialog, ttk
 
 import numpy as np
-from PIL import Image, ImageTk
+from magicgui import magicgui
 from pymmcore_plus.mda import mda_listeners_connected
 from pymmcore_plus.mda.handlers import OMETiffWriter
-from useq import MDAEvent, MDASequence, ZPlan  # CORRECTED: Import ZPlan
+from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import (
+    QFormLayout,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+from useq import MDAEvent, MDASequence
 
 from .config import AcquisitionSettings
 from .hardware_control import (
@@ -23,341 +34,251 @@ from .hardware_control import (
 )
 
 
-class AcquisitionGUI:
-    def __init__(self, root: tk.Tk, hw_interface: HardwareInterface):
-        self.root = root
+class WorkerSignals(QObject):
+    """Defines signals available from a running worker thread."""
+
+    finished = Signal()
+    error = Signal(tuple)
+    status = Signal(str)
+    frame_ready = Signal(np.ndarray, MDAEvent)
+
+
+# CORRECTED: Explicitly set the widget_type for `save_dir` to 'FileEdit'
+# to ensure it can accept the `mode='d'` argument.
+@magicgui(
+    call_button=False,
+    layout="form",
+    save_dir={"widget_type": "FileEdit", "mode": "d", "label": "Save Directory"},
+    num_time_points={"label": "Time Points"},
+    time_interval_s={"label": "Interval (s)"},
+    minimal_interval={"label": "Minimal Interval"},
+    num_slices={"label": "Slices/Volume"},
+    laser_trig_duration_ms={"label": "Laser Duration (ms)"},
+    step_size_um={"label": "Step Size (µm)"},
+    should_save={"label": "Save to Disk"},
+    save_prefix={"label": "File Prefix"},
+)
+def acquisition_widget(
+    num_time_points: int = 1,
+    time_interval_s: float = 10.0,
+    minimal_interval: bool = False,
+    num_slices: int = 3,
+    laser_trig_duration_ms: float = 10.0,
+    step_size_um: float = 1.0,
+    should_save: bool = False,
+    save_dir="",
+    save_prefix: str = "acquisition",
+):
+    """Magicgui widget for acquisition parameters."""
+    pass
+
+
+class AcquisitionGUI(QMainWindow):
+    def __init__(self, hw_interface: HardwareInterface):
+        super().__init__()
         self.hw_interface = hw_interface
         self.settings = AcquisitionSettings()
-        self.root.title("ASI OPM Acquisition Control")
+        self.setWindowTitle("ASI OPM Acquisition Control")
+        self.setMinimumSize(600, 700)
 
-        # GUI Variables
-        self.num_slices_var = tk.IntVar(value=self.settings.num_slices)
-        self.step_size_var = tk.DoubleVar(value=self.settings.step_size_um)
-        self.laser_duration_var = tk.DoubleVar(value=self.settings.laser_trig_duration_ms)
-        self.num_time_points_var = tk.IntVar(value=1)
-        self.time_interval_s_var = tk.DoubleVar(value=10.0)
-        self.minimal_interval_var = tk.BooleanVar(value=False)
-        self.should_save_var = tk.BooleanVar(value=False)
-        self.save_dir_var = tk.StringVar()
-        self.save_prefix_var = tk.StringVar(value="acquisition")
-
-        # Display Variables
-        self.camera_exposure_var = tk.StringVar()
-        self.min_interval_display_var = tk.StringVar()
-        self.total_time_display_var = tk.StringVar()
-        self.status_var = tk.StringVar(value="Ready")
-        self._last_img = None
-
-        # Acquisition State
         self.acquisition_in_progress = False
-        self.cancel_requested = False
         self.pixel_size_um = 1.0
 
-        self.create_widgets()
-        self._bind_traces()
+        self._create_main_widgets()
+        self._layout_widgets()
+        self._connect_signals()
         self._update_all_estimates()
-        self.control_widgets = []
 
-    def create_widgets(self):
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill="both", expand=True)
-        main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_rowconfigure(3, weight=1)
+    def _create_main_widgets(self):
+        self.controls_widget = acquisition_widget.native
+        self.estimates_widget = self._create_estimates_widget()
+        self.image_display = QLabel("Camera Image")
+        self.image_display.setMinimumSize(512, 512)
+        self.image_display.setStyleSheet("background-color: black;")
+        self.run_button = QPushButton("Run Time Series")
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setEnabled(False)
 
-        top_controls = ttk.Frame(main_frame)
-        top_controls.grid(row=0, column=0, sticky="ew")
-        top_controls.grid_columnconfigure(0, weight=1)
-        top_controls.grid_columnconfigure(1, weight=1)
+    def _create_estimates_widget(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout()
+        widget.setLayout(layout)
+        self.cam_exposure_label = QLabel()
+        self.min_interval_label = QLabel()
+        self.total_time_label = QLabel()
+        layout.addRow("Camera Exposure:", self.cam_exposure_label)
+        layout.addRow("Min. Interval/Volume:", self.min_interval_label)
+        layout.addRow("Est. Total Time:", self.total_time_label)
+        return widget
 
-        ts_frame = ttk.Labelframe(top_controls, text="Time Series")
-        ts_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
-        ts_frame.grid_columnconfigure(1, weight=1)
-        self._add_control_widget(
-            ttk.Label(ts_frame, text="Time Points"),
-            (0, 0),
-            {"sticky": "w", "padx": 5, "pady": 2},
-        )
-        self._add_control_widget(
-            ttk.Entry(ts_frame, textvariable=self.num_time_points_var),
-            (0, 1),
-            {"sticky": "ew", "padx": 5},
-        )
-        self._add_control_widget(
-            ttk.Label(ts_frame, text="Interval (s)"),
-            (1, 0),
-            {"sticky": "w", "padx": 5, "pady": 2},
-        )
-        self._add_control_widget(
-            ttk.Entry(ts_frame, textvariable=self.time_interval_s_var),
-            (1, 1),
-            {"sticky": "ew", "padx": 5},
-        )
-        self._add_control_widget(
-            ttk.Checkbutton(ts_frame, text="Minimal Interval", variable=self.minimal_interval_var),
-            (1, 2),
-            {"sticky": "w", "padx": 5},
-        )
+    def _layout_widgets(self):
+        central_widget = QWidget()
+        main_layout = QVBoxLayout()
+        central_widget.setLayout(main_layout)
+        grid_layout = QGridLayout()
+        grid_layout.addWidget(self.controls_widget, 0, 0)
+        grid_layout.addWidget(self.estimates_widget, 0, 1)
+        main_layout.addLayout(grid_layout)
+        main_layout.addWidget(self.image_display)
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(self.run_button)
+        button_layout.addWidget(self.cancel_button)
+        button_layout.addStretch()
+        main_layout.addLayout(button_layout)
+        self.setCentralWidget(central_widget)
 
-        vol_frame = ttk.Labelframe(top_controls, text="Volume & Timing")
-        vol_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
-        vol_frame.grid_columnconfigure(1, weight=1)
-        self._add_control_widget(ttk.Label(vol_frame, text="Slices/Volume"), (0, 0), {"sticky": "w", "padx": 5})
-        self._add_control_widget(
-            ttk.Entry(vol_frame, textvariable=self.num_slices_var),
-            (0, 1),
-            {"sticky": "ew", "padx": 5},
-        )
-        self._add_control_widget(
-            ttk.Label(vol_frame, text="Laser Duration (ms)"),
-            (1, 0),
-            {"sticky": "w", "padx": 5},
-        )
-        self._add_control_widget(
-            ttk.Entry(vol_frame, textvariable=self.laser_duration_var),
-            (1, 1),
-            {"sticky": "ew", "padx": 5},
-        )
+    def _connect_signals(self):
+        self.run_button.clicked.connect(self.start_time_series)
+        self.cancel_button.clicked.connect(self._request_cancel)
+        acquisition_widget.changed.connect(self._update_all_estimates)
 
-        save_frame = ttk.Labelframe(main_frame, text="Data Saving")
-        save_frame.grid(row=1, column=0, sticky="ew", pady=5)
-        save_frame.grid_columnconfigure(1, weight=1)
-        self._add_control_widget(
-            ttk.Checkbutton(save_frame, text="Save to disk", variable=self.should_save_var),
-            (0, 0),
-            {"padx": 5},
-        )
-        dir_entry = ttk.Entry(save_frame, textvariable=self.save_dir_var, state="readonly")
-        dir_entry.grid(row=0, column=1, sticky="ew", padx=5)
-        self.control_widgets.append(dir_entry)
-        browse_btn = ttk.Button(save_frame, text="Browse...", command=self._browse_save_directory)
-        browse_btn.grid(row=0, column=2, padx=5)
-        self.control_widgets.append(browse_btn)
-        self._add_control_widget(ttk.Label(save_frame, text="File Prefix:"), (0, 3), {"padx": 5})
-        self._add_control_widget(
-            ttk.Entry(save_frame, textvariable=self.save_prefix_var),
-            (0, 4),
-            {"sticky": "ew", "padx": 5},
-        )
-
-        est_frame = ttk.Labelframe(main_frame, text="Estimates")
-        est_frame.grid(row=2, column=0, sticky="ew", pady=5)
-        # ... (rest of the GUI creation is the same)
-        est_frame.grid_columnconfigure(1, weight=1)
-        est_frame.grid_columnconfigure(3, weight=1)
-        ttk.Label(est_frame, text="Camera Exposure:").grid(row=0, column=0, sticky="w", padx=5)
-        ttk.Label(est_frame, textvariable=self.camera_exposure_var).grid(row=0, column=1, sticky="w", padx=5)
-        ttk.Label(est_frame, text="Min. Interval/Volume:").grid(row=0, column=2, sticky="w", padx=5)
-        ttk.Label(est_frame, textvariable=self.min_interval_display_var).grid(row=0, column=3, sticky="w", padx=5)
-        ttk.Label(est_frame, text="Est. Total Time:").grid(row=1, column=2, sticky="w", padx=5)
-        ttk.Label(est_frame, textvariable=self.total_time_display_var).grid(row=1, column=3, sticky="w", padx=5)
-
-        display_frame = ttk.Frame(main_frame)
-        display_frame.grid(row=3, column=0, sticky="nsew", pady=5)
-        display_frame.grid_columnconfigure(0, weight=1)
-        display_frame.grid_rowconfigure(0, weight=1)
-        self.image_panel = ttk.Label(display_frame, text="Camera Image", background="black", anchor="center")
-        self.image_panel.grid(row=0, column=0, sticky="nsew")
-
-        bottom_bar = ttk.Frame(main_frame)
-        bottom_bar.grid(row=4, column=0, sticky="ew", pady=(5, 0))
-        bottom_bar.grid_columnconfigure(1, weight=1)
-        self.run_button = ttk.Button(bottom_bar, text="Run Time Series", command=self.start_time_series)
-        self.run_button.grid(row=0, column=0, padx=5)
-        self.cancel_button = ttk.Button(bottom_bar, text="Cancel", command=self._request_cancel, state="disabled")
-        self.cancel_button.grid(row=0, column=1, padx=5)
-        ttk.Label(bottom_bar, textvariable=self.status_var, anchor="w").grid(row=0, column=2, sticky="ew", padx=5)
-        ttk.Button(bottom_bar, text="Exit", command=self.root.quit).grid(row=0, column=3, padx=5)
-
-    def _add_control_widget(self, widget, grid_pos, grid_params):
-        widget.grid(row=grid_pos[0], column=grid_pos[1], **grid_params)
-        self.control_widgets.append(widget)
-
-    def _set_controls_enabled(self, enabled: bool):
-        for widget in self.control_widgets:
-            try:
-                widget.configure(state="normal" if enabled else "disabled")
-            except tk.TclError:
-                pass  # some widgets don't have a state
-
-    def _browse_save_directory(self):
-        directory = filedialog.askdirectory(title="Select Save Directory", initialdir=self.save_dir_var.get())
-        if directory:
-            self.save_dir_var.set(directory)
-
-    def _bind_traces(self):
-        for var in [
-            self.num_time_points_var,
-            self.time_interval_s_var,
-            self.num_slices_var,
-            self.laser_duration_var,
-            self.minimal_interval_var,
-        ]:
-            var.trace_add("write", self._update_all_estimates)
-
-    def _update_all_estimates(self, *args):
-        try:
-            self.settings.num_slices = self.num_slices_var.get()
-            self.settings.laser_trig_duration_ms = self.laser_duration_var.get()
-            self.settings.step_size_um = self.step_size_var.get()
-            self.camera_exposure_var.set(f"{self.settings.camera_exposure_ms:.2f} ms")
-            min_interval_s = self._calculate_minimal_interval()
-            self.min_interval_display_var.set(f"{min_interval_s:.2f} s")
-            total_time_str = self._calculate_total_time(min_interval_s)
-            self.total_time_display_var.set(total_time_str)
-        except (tk.TclError, ValueError):
-            return
+    @Slot()
+    def _update_all_estimates(self):
+        params = acquisition_widget.asdict()
+        self.settings.num_slices = params["num_slices"]
+        self.settings.laser_trig_duration_ms = params["laser_trig_duration_ms"]
+        self.settings.step_size_um = params["step_size_um"]
+        self.cam_exposure_label.setText(f"{self.settings.camera_exposure_ms:.2f} ms")
+        min_interval_s = self._calculate_minimal_interval()
+        self.min_interval_label.setText(f"{min_interval_s:.2f} s")
+        self.total_time_label.setText(self._calculate_total_time(min_interval_s, params["num_time_points"]))
 
     def _calculate_minimal_interval(self) -> float:
-        overhead_factor = 1.10
-        total_exposure_ms = self.settings.num_slices * self.settings.camera_exposure_ms
-        return (total_exposure_ms * overhead_factor) / 1000.0
+        exposure_ms = self.settings.camera_exposure_ms * self.settings.num_slices
+        return (exposure_ms * 1.10) / 1000.0
 
-    def _calculate_total_time(self, min_interval_s: float) -> str:
-        num_time_points = self.num_time_points_var.get()
-        if self.minimal_interval_var.get():
-            time_per_volume_s = min_interval_s
-        else:
-            user_interval_s = self.time_interval_s_var.get()
-            time_per_volume_s = max(user_interval_s, min_interval_s)
-        total_seconds = time_per_volume_s * num_time_points
-        h = int(total_seconds // 3600)
-        m = int((total_seconds % 3600) // 60)
-        s = int(total_seconds % 60)
-        return f"{h:02d}:{m:02d}:{s:02d}"
+    def _calculate_total_time(self, min_interval_s: float, num_time_points: int) -> str:
+        params = acquisition_widget.asdict()
+        interval = min_interval_s if params["minimal_interval"] else max(params["time_interval_s"], min_interval_s)
+        total_seconds = interval * num_time_points
+        h, rem = divmod(total_seconds, 3600)
+        m, s = divmod(rem, 60)
+        return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
 
-    def _request_cancel(self):
-        print("--- Cancel Requested by User ---")
-        self.cancel_requested = True
-        if self.acquisition_in_progress:
-            mmc.mda.cancel()
-
+    @Slot()
     def start_time_series(self):
         if self.acquisition_in_progress:
             return
-
-        self.acquisition_in_progress = True
-        self.cancel_requested = False
-        self._set_controls_enabled(False)
-        self.run_button.configure(state="disabled")
-        self.cancel_button.configure(state="normal")
-
         try:
             self.pixel_size_um = mmc.getPixelSizeUm() or 1.0
         except Exception:
             self.pixel_size_um = 1.0
-            print("Warning: Could not get pixel size. Defaulting to 1.0 µm.")
+            self.statusBar().showMessage("Warning: Could not get pixel size.", 3000)
+        self._set_controls_enabled(False)
 
-        self._update_all_estimates()
+        self.acquisition_thread = QThread()
+        self.worker = self.AcquisitionWorker(self)
+        self.worker.moveToThread(self.acquisition_thread)
 
-        import threading
+        self.worker.signals.finished.connect(self.acquisition_thread.quit)
+        self.worker.signals.finished.connect(self.worker.deleteLater)
+        self.acquisition_thread.finished.connect(self.acquisition_thread.deleteLater)
+        self.worker.signals.status.connect(self.statusBar().showMessage)
+        self.worker.signals.frame_ready.connect(self.display_image)
+        self.worker.signals.finished.connect(self._finish_time_series)
 
-        thread = threading.Thread(target=self._run_mda_thread)
-        thread.start()
+        self.acquisition_thread.started.connect(self.worker.run)
+        self.acquisition_thread.start()
 
-    def _run_mda_thread(self):
-        """Main acquisition loop, now using MDA."""
-        time_points_total = self.num_time_points_var.get()
+    @Slot()
+    def _request_cancel(self):
+        if self.acquisition_in_progress:
+            self.statusBar().showMessage("Cancellation requested...")
+            mmc.mda.cancel()
 
-        mmc.setCameraDevice(self.hw_interface.camera1)
+    def _set_controls_enabled(self, enabled: bool):
+        self.controls_widget.setEnabled(enabled)
+        self.run_button.setEnabled(enabled)
+        self.cancel_button.setEnabled(not enabled)
+        self.acquisition_in_progress = not enabled
 
-        for t_point in range(time_points_total):
-            if self.cancel_requested:
-                break
-
-            volume_start_time = time.monotonic()
-            self.status_var.set(f"Running Time Point {t_point + 1}/{time_points_total}")
-
-            galvo_amp, galvo_center, num_slices = calculate_galvo_parameters(self.settings)
-
-            # CORRECTED: Build the sequence explicitly.
-            sequence = MDASequence()
-            sequence.z_plan = ZPlan(steps=num_slices, step=self.settings.step_size_um)
-
-            writer = None
-            if self.should_save_var.get():
-                save_dir = self.save_dir_var.get()
-                prefix = self.save_prefix_var.get()
-                if not save_dir or not prefix:
-                    print("Error: Cannot save. Directory or prefix is missing.")
-                    self._finish_time_series()
-                    return
-
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"{prefix}_T{t_point + 1:04d}_{timestamp}.tif"
-                filepath = os.path.join(save_dir, filename)
-
-                writer = OMETiffWriter(filepath)
-
-            def _setup_plogic_for_volume(event: MDAEvent):
-                if event.index.get("z", 0) == 0:
-                    print("Configuring PLogic and triggering hardware Z-scan...")
-                    configure_devices_for_slice_scan(self.settings, galvo_amp, galvo_center, num_slices)
-                    mmc.setExposure(self.settings.camera_exposure_ms)
-                    trigger_slice_scan_acquisition()
-
-            def _on_frame_ready(image: np.ndarray, event: MDAEvent):
-                self.display_image(image)
-                z_index = event.index.get("z", 0)
-                self.status_var.set(f"Time Point {t_point + 1}/{time_points_total} | Slice {z_index + 1}/{num_slices}")
-
-            handlers = [_setup_plogic_for_volume, _on_frame_ready]
-            if writer:
-                handlers.append(writer)
-
-            try:
-                with mda_listeners_connected(*handlers):
-                    mmc.run_mda(sequence)
-            except RuntimeError as e:
-                if "acquisition canceled" in str(e):
-                    print("Acquisition gracefully cancelled.")
-                else:
-                    raise
-
-            _reset_for_next_volume()
-
-            if t_point < time_points_total - 1:
-                volume_duration = time.monotonic() - volume_start_time
-                if self.minimal_interval_var.get():
-                    delay_s = 0
-                else:
-                    user_interval_s = self.time_interval_s_var.get()
-                    delay_s = max(0, user_interval_s - volume_duration)
-
-                self.status_var.set(f"Waiting {delay_s:.1f}s for next time point...")
-                time.sleep(delay_s)
-
-        self._finish_time_series()
-
+    @Slot()
     def _finish_time_series(self):
+        status = "Cancelled" if mmc.mda.is_paused() else "Acquisition finished."
+        self.statusBar().showMessage(status, 5000)
+        self._set_controls_enabled(True)
         final_cleanup(self.settings)
         self.hw_interface.find_and_set_trigger_mode(self.hw_interface.camera1, ["Internal", "Internal Trigger"])
 
-        self.acquisition_in_progress = False
-        self._set_controls_enabled(True)
-        self.run_button.configure(state="normal")
-        self.cancel_button.configure(state="disabled")
-        self.status_var.set("Ready" if not self.cancel_requested else "Cancelled")
+    @Slot(np.ndarray, MDAEvent)
+    def display_image(self, image: np.ndarray, event: MDAEvent):
+        h, w = image.shape
+        norm = ((image - image.min()) / (image.max() or 1) * 255).astype(np.uint8)
+        q_image = QImage(norm.data, w, h, w, QImage.Format.Format_Grayscale8)
+        pixmap = QPixmap.fromImage(q_image).scaled(
+            self.image_display.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.image_display.setPixmap(pixmap)
 
-    def display_image(self, img_array: np.ndarray):
-        try:
-            container = self.image_panel.master
-            container_w = container.winfo_width()
-            container_h = container.winfo_height()
-            if container_w < 2 or container_h < 2:
-                self.root.after(50, lambda: self.display_image(img_array))
-                return
+    class AcquisitionWorker(QObject):
+        signals = WorkerSignals()
 
-            img_min, img_max = np.min(img_array), np.max(img_array)
-            if img_min == img_max:
-                img_normalized = np.zeros_like(img_array, dtype=np.uint8)
-            else:
-                img_normalized = ((img_array - img_min) / (img_max - img_min) * 255).astype(np.uint8)
+        def __init__(self, gui_instance):
+            super().__init__()
+            self.gui = gui_instance
 
-            pil_img = Image.fromarray(img_normalized)
-            pil_img.thumbnail((container_w, container_h), Image.Resampling.LANCZOS)
-            tk_img = ImageTk.PhotoImage(pil_img)
-            self.image_panel.configure(image=tk_img)
-            self._last_img = tk_img
-        except Exception as e:
-            if "pyimage" not in str(e):
-                print(f"Error processing image for display: {e}")
+        @Slot()
+        def run(self):
+            try:
+                params = acquisition_widget.asdict()
+                mmc.setCameraDevice(self.gui.hw_interface.camera1)
+                for t_point in range(params["num_time_points"]):
+                    if mmc.mda.is_paused():
+                        break
+                    self.signals.status.emit(f"Running Time Point {t_point + 1}/{params['num_time_points']}")
+                    volume_start_time = time.monotonic()
+                    sequence = self._create_mda_sequence()
+                    writer = self._setup_writer(t_point, params)
+                    handlers = [self._setup_plogic, self.signals.frame_ready]
+                    if writer:
+                        handlers.append(writer)
+                    with mda_listeners_connected(*handlers):
+                        mmc.run_mda(sequence)
+                    _reset_for_next_volume()
+                    self._wait_for_interval(t_point, params, volume_start_time)
+            except Exception:
+                traceback.print_exc()
+            finally:
+                self.signals.finished.emit()
+
+        def _create_mda_sequence(self) -> MDASequence:
+            _, _, num_slices = calculate_galvo_parameters(self.gui.settings)
+            z_plan_dict = {
+                "steps": num_slices,
+                "step": self.gui.settings.step_size_um,
+            }
+            sequence = MDASequence(z_plan=z_plan_dict)  # type: ignore
+            return sequence
+
+        def _setup_writer(self, t_point: int, params: dict):
+            if not params["should_save"]:
+                return None
+            save_dir = params["save_dir"]
+            prefix = params["save_prefix"]
+            if not save_dir or not prefix:
+                self.signals.status.emit("Error: Save directory or prefix missing.")
+                return None
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{prefix}_T{t_point + 1:04d}_{timestamp}.tif"
+            filepath = os.path.join(save_dir, filename)
+            return OMETiffWriter(filepath)
+
+        def _setup_plogic(self, event: MDAEvent):
+            if event.index.get("z", 0) == 0:
+                (
+                    galvo_amp,
+                    galvo_center,
+                    num_slices,
+                ) = calculate_galvo_parameters(self.gui.settings)
+                configure_devices_for_slice_scan(self.gui.settings, galvo_amp, galvo_center, num_slices)
+                mmc.setExposure(self.gui.settings.camera_exposure_ms)
+                trigger_slice_scan_acquisition()
+
+        def _wait_for_interval(self, t_point: int, params: dict, start_time: float):
+            if t_point < params["num_time_points"] - 1:
+                user_interval = params["time_interval_s"]
+                wait_time = 0 if params["minimal_interval"] else max(0, user_interval - (time.monotonic() - start_time))
+                self.signals.status.emit(f"Waiting {wait_time:.1f}s for next time point...")
+                time.sleep(wait_time)

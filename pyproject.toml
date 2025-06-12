@@ -7,6 +7,7 @@ dependencies = [
   "tifffile",
   "pillow",
   "qtpy",
+  "magicgui>=0.10.0",
 ]
 requires-python = ">=3.9"
 authors = [
