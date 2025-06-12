@@ -43,25 +43,25 @@ from .settings import AcquisitionSettings, HardwareConstants
 class AcquisitionGUI(QMainWindow):
     """The main window for the microscope control application."""
 
-    # --- Type Hint Declarations for Instance Attributes ---
     mmc: CMMCorePlus
     const: HardwareConstants
     acq_engine: Optional[AcquisitionEngine]
     _acq_thread: Optional[QThread]
     live_engine: Optional[LiveEngine]
     _live_thread: Optional[QThread]
+    demo_mode: bool
 
-    # --- UI Widget Declarations ---
     nav_panel: NavigationPanel
     live_button: QPushButton
-    # ... (all other widgets) ...
 
-    def __init__(self):
+    def __init__(self, demo_mode: bool = False):
         super().__init__()
         self.setWindowTitle("Microscope Control")
+        if demo_mode:
+            self.setWindowTitle("Microscope Control (DEMO MODE)")
         self.resize(800, 900)
 
-        # --- Initialize Core Components ---
+        self.demo_mode = demo_mode
         self.mmc = CMMCorePlus.instance()
         self.const = HardwareConstants()
         self._load_hardware_config()
@@ -71,7 +71,6 @@ class AcquisitionGUI(QMainWindow):
         self.live_engine = None
         self._live_thread = None
 
-        # --- Build the UI ---
         self._create_widgets()
         self._layout_widgets()
         self._connect_ui_signals()
@@ -86,12 +85,17 @@ class AcquisitionGUI(QMainWindow):
                 raise RuntimeError("Could not find MM. Run 'mmcore install'.")
             self.mmc.setDeviceAdapterSearchPaths([mm_path])
 
-            config_path = os.path.abspath(self.const.CFG_PATH)
-            if not os.path.exists(config_path):
-                raise FileNotFoundError(f"Hardware config file not found: {config_path}")
+            if self.demo_mode:
+                print("Loading in DEMO mode.")
+                # The correct way to load the demo config with pymmcore-plus
+                self.mmc.loadSystemConfiguration("demo")
+            else:
+                config_path = os.path.abspath(self.const.CFG_PATH)
+                if not os.path.exists(config_path):
+                    raise FileNotFoundError(f"Hardware config file not found: {config_path}")
+                print(f"Loading hardware configuration: {config_path}")
+                self.mmc.loadSystemConfiguration(config_path)
 
-            print(f"Loading hardware configuration: {config_path}")
-            self.mmc.loadSystemConfiguration(config_path)
             print("Hardware configuration loaded successfully.")
 
         except Exception as e:
@@ -135,28 +139,24 @@ class AcquisitionGUI(QMainWindow):
         """Arrange all the created widgets in layouts."""
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.nav_panel)
-
         live_layout = QHBoxLayout()
         live_layout.addWidget(self.live_button)
         live_layout.addWidget(QLabel("Exposure (ms):"))
         live_layout.addWidget(self.live_exposure_spinbox)
         live_layout.addStretch()
         main_layout.addLayout(live_layout)
-
         acq_controls_layout = QHBoxLayout()
         ts_layout = QFormLayout(self.ts_group)
         ts_layout.addRow("Time Points:", self.time_points_spinbox)
         ts_layout.addRow("Interval (s):", self.interval_spinbox)
         ts_layout.addRow("", self.minimal_interval_checkbox)
         acq_controls_layout.addWidget(self.ts_group)
-
         vol_layout = QFormLayout(self.vol_group)
         vol_layout.addRow("Slices/Volume:", self.slices_spinbox)
         vol_layout.addRow("Step Size (µm):", self.step_size_spinbox)
         vol_layout.addRow("Laser Duration (ms):", self.laser_duration_spinbox)
         acq_controls_layout.addWidget(self.vol_group)
         main_layout.addLayout(acq_controls_layout)
-
         save_layout = QGridLayout(self.save_group)
         save_layout.addWidget(self.save_checkbox, 0, 0)
         save_layout.addWidget(self.save_dir_entry, 0, 1)
@@ -164,21 +164,17 @@ class AcquisitionGUI(QMainWindow):
         save_layout.addWidget(QLabel("File Prefix:"), 0, 3)
         save_layout.addWidget(self.prefix_entry, 0, 4)
         main_layout.addWidget(self.save_group)
-
         est_layout = QFormLayout(self.est_group)
         est_layout.addRow("Camera Exposure (ms):", self.exposure_label)
         est_layout.addRow("Min. Interval/Volume (s):", self.min_interval_label)
         est_layout.addRow("Estimated Total Time:", self.total_time_label)
         main_layout.addWidget(self.est_group)
-
         main_layout.addWidget(self.image_display, stretch=1)
-
         bottom_button_layout = QHBoxLayout()
         bottom_button_layout.addWidget(self.run_button)
         bottom_button_layout.addWidget(self.cancel_button)
         bottom_button_layout.addStretch()
         main_layout.addLayout(bottom_button_layout)
-
         central_widget = QWidget()
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
@@ -190,8 +186,6 @@ class AcquisitionGUI(QMainWindow):
         self.cancel_button.clicked.connect(self._on_cancel)
         self.minimal_interval_checkbox.toggled.connect(self.interval_spinbox.setDisabled)
         self.live_button.toggled.connect(self._on_live_toggled)
-
-        # Connect parameter changes to the estimate updater
         param_widgets = [
             self.time_points_spinbox,
             self.interval_spinbox,
@@ -207,22 +201,17 @@ class AcquisitionGUI(QMainWindow):
         if self._live_thread and self._live_thread.isRunning():
             return
 
-        self.live_engine = LiveEngine(self.mmc, self.const)
+        self.live_engine = LiveEngine(self.mmc, self.const, is_demo=self.demo_mode)
         self._live_thread = QThread()
         self.live_engine.moveToThread(self._live_thread)
-
-        # Connect signals between threads
         self._live_thread.started.connect(self.live_engine.run)
         self.live_engine.positions_updated.connect(self.nav_panel.update_positions)
         self.live_engine.new_live_image.connect(self.update_image)
         self.live_engine.stopped.connect(self._on_live_engine_stopped)
-
-        # Connect GUI controls directly to the live engine's slots
         self.nav_panel.move_to_requested.connect(self.live_engine.move_stage_to)
         self.nav_panel.move_by_requested.connect(self.live_engine.move_stage_by)
         self.nav_panel.jog_started.connect(self.live_engine.start_jog)
         self.nav_panel.jog_stopped.connect(self.live_engine.stop_jog)
-
         self._live_thread.start()
 
     def _stop_live_engine(self):
@@ -245,30 +234,22 @@ class AcquisitionGUI(QMainWindow):
 
     @Slot()
     def _start_acquisition_sequence(self):
-        """
-        Starts the acquisition. This is called only after the LiveEngine has
-        confirmed it has stopped, ensuring a clean hardware state.
-        """
+        """Starts the acquisition after the LiveEngine has stopped."""
         if self.live_engine:
             try:
                 self.live_engine.stopped.disconnect(self._start_acquisition_sequence)
             except (TypeError, RuntimeError):
-                pass  # Signal may already be disconnected
+                pass
         self.update_status("Starting acquisition...")
-
         settings = self._get_settings_from_gui()
-        # The AcquisitionEngine needs the specialized controller for complex sequences
-        hw_controller = HardwareController(self.mmc, self.const)
+        hw_controller = HardwareController(self.mmc, self.const, is_demo=self.demo_mode)
         self.acq_engine = AcquisitionEngine(hw_controller, settings)
         self._acq_thread = QThread()
         self.acq_engine.moveToThread(self._acq_thread)
-
-        # Connect signals
         self._acq_thread.started.connect(self.acq_engine.run_acquisition)
         self.acq_engine.acquisition_finished.connect(self.on_acquisition_finished)
         self.acq_engine.new_image_ready.connect(self.update_image)
         self.acq_engine.status_updated.connect(self.update_status)
-
         self.run_button.setHidden(True)
         self.cancel_button.setHidden(False)
         self._acq_thread.start()
@@ -294,13 +275,11 @@ class AcquisitionGUI(QMainWindow):
     def _on_live_engine_stopped(self):
         """Cleans up after the live engine thread has fully exited."""
         print("GUI notified that Live Engine has stopped.")
-        # Disconnect signals to prevent dangling connections
         if self.live_engine:
             self.nav_panel.move_to_requested.disconnect(self.live_engine.move_stage_to)
             self.nav_panel.move_by_requested.disconnect(self.live_engine.move_stage_by)
             self.nav_panel.jog_started.disconnect(self.live_engine.start_jog)
             self.nav_panel.jog_stopped.disconnect(self.live_engine.stop_jog)
-
         self._live_thread = None
         self.live_engine = None
 
@@ -316,10 +295,9 @@ class AcquisitionGUI(QMainWindow):
         """Calculates and updates the timing estimates in the GUI."""
         settings = self._get_settings_from_gui()
         self.exposure_label.setText(f"{settings.camera_exposure_ms:.2f}")
-        overhead = 1.10  # 10% overhead
+        overhead = 1.10
         min_interval_s = (settings.num_slices * settings.camera_exposure_ms * overhead) / 1000.0
         self.min_interval_label.setText(f"{min_interval_s:.2f}")
-
         time_per_vol = (
             max(settings.time_interval_s, min_interval_s) if not settings.is_minimal_interval else min_interval_s
         )
@@ -367,16 +345,13 @@ class AcquisitionGUI(QMainWindow):
         if self._acq_thread:
             self._acq_thread.quit()
             self._acq_thread.wait()
-
         self.acq_engine = None
         self._acq_thread = None
-
         self.run_button.setHidden(False)
         self.cancel_button.setHidden(True)
         self.run_button.setEnabled(True)
         self.live_button.setEnabled(True)
         self.status_bar.showMessage("Ready")
-
         self._start_live_engine()
 
     def closeEvent(self, event: QCloseEvent):

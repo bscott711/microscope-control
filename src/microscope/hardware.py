@@ -17,21 +17,26 @@ from .settings import AcquisitionSettings, HardwareConstants
 class HardwareController:
     """A class to orchestrate complex hardware sequences."""
 
-    def __init__(self, mmc: CMMCorePlus, const: HardwareConstants):
+    def __init__(self, mmc: CMMCorePlus, const: HardwareConstants, is_demo: bool = False):
         """
         Initializes the HardwareController.
         Args:
             mmc: The pymmcore-plus instance.
             const: The HardwareConstants data object.
+            is_demo: A flag indicating if the system is in demo mode.
         """
         self.mmc = mmc
         self.const = const
+        self.is_demo = is_demo
         self.initial_galvo_y_offset: float = 0.0
 
     def _execute_tiger_serial_command(self, command: str):
         """Sends a raw serial command to the Tiger controller."""
+        if self.is_demo:
+            print(f"[DEMO] Skipping serial command: {command}")
+            return
+
         hub = self.const.TIGER_COMM_HUB_LABEL
-        # This logic ensures the command is sent even if it's the same as the last one
         original_setting = self.mmc.getProperty(hub, "OnlySendSerialCommandOnChange")
         if original_setting == "Yes":
             self.mmc.setProperty(hub, "OnlySendSerialCommandOnChange", "No")
@@ -41,7 +46,7 @@ class HardwareController:
 
         if original_setting == "Yes":
             self.mmc.setProperty(hub, "OnlySendSerialCommandOnChange", "Yes")
-        time.sleep(0.02)  # Critical delay for the controller
+        time.sleep(0.02)
 
     def _set_property(self, device_label: str, prop: str, value):
         """Safely sets a property on a device if it has changed."""
@@ -50,17 +55,15 @@ class HardwareController:
                 print(f"Setting {device_label}.{prop} = {value}")
                 self.mmc.setProperty(device_label, prop, value)
         else:
-            print(f"Warn: Property '{prop}' not found on device '{device_label}'.")
+            if not self.is_demo:
+                print(f"Warn: Property '{prop}' not found on device '{device_label}'.")
 
     def setup_for_acquisition(self, settings: AcquisitionSettings):
         """Configures all devices for a triggered Z-stack acquisition."""
         print("Configuring devices for acquisition...")
         self.mmc.setCameraDevice(self.const.CAMERA_A_LABEL)
         self.mmc.setExposure(settings.camera_exposure_ms)
-
-        # Set camera to external trigger mode
         self._set_property(self.const.CAMERA_A_LABEL, "TriggerMode", "Edge Trigger")
-
         self._configure_plogic(settings)
         self._configure_spim_scan(settings)
         self._arm_spim_devices()
@@ -70,8 +73,7 @@ class HardwareController:
         self._reset_plogic()
         plogic_addr = self.const.PLOGIC_LABEL[-2:]
         print(f"Programming PLogic at {plogic_addr}")
-
-        # Laser pulse (Cell 10) triggered by camera (44)
+        # ... (PLogic commands as before)
         self._execute_tiger_serial_command(f"{plogic_addr}CCA X={self.const.PLOGIC_LASER_PRESET_NUM}")
         self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_LASER_ON_CELL}")
         self._execute_tiger_serial_command("CCA Y=14")
@@ -80,8 +82,6 @@ class HardwareController:
         self._execute_tiger_serial_command(
             f"CCB X={self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
         )
-
-        # Delay before laser (Cell 11) triggered by galvo (43)
         self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_LASER_CELL}")
         self._execute_tiger_serial_command("CCA Y=13")
         cycles = int(settings.delay_before_laser_ms * self.const.PULSES_PER_MS)
@@ -89,8 +89,6 @@ class HardwareController:
         self._execute_tiger_serial_command(
             f"CCB X={self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
         )
-
-        # Delay before camera (Cell 12) triggered by galvo (43)
         self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_DELAY_BEFORE_CAMERA_CELL}")
         self._execute_tiger_serial_command("CCA Y=13")
         cycles = int(settings.delay_before_camera_ms * self.const.PULSES_PER_MS)
@@ -98,14 +96,10 @@ class HardwareController:
         self._execute_tiger_serial_command(
             f"CCB X={self.const.PLOGIC_GALVO_TRIGGER_TTL_ADDR} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
         )
-
-        # Chain the delays: camera delay (12) -> camera trigger (44)
         self._execute_tiger_serial_command(f"M E={self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR}")
         self._execute_tiger_serial_command(
             f"CCB X={self.const.PLOGIC_DELAY_BEFORE_CAMERA_CELL} Y={self.const.PLOGIC_4KHZ_CLOCK_ADDR}"
         )
-
-        # Enable clock and final trigger output
         self._execute_tiger_serial_command(f"{plogic_addr}M D={self.const.PLOGIC_4KHZ_CLOCK_ADDR}")
         self._execute_tiger_serial_command(f"{plogic_addr}M E={self.const.PLOGIC_CAMERA_TRIGGER_TTL_ADDR}")
 
@@ -114,17 +108,19 @@ class HardwareController:
         galvo = self.const.GALVO_A_LABEL
         piezo = self.const.Z_PIEZO_LABEL
         slope = self.const.SLICE_CALIBRATION_SLOPE_UM_PER_DEG
-        self.initial_galvo_y_offset = self.mmc.getYPosition(galvo)
+        try:
+            self.initial_galvo_y_offset = self.mmc.getYPosition(galvo)
+        except Exception:
+            self.initial_galvo_y_offset = 0.0  # Demo mode case
 
         num_slices_ctrl = settings.num_slices
         piezo_travel_um = (settings.num_slices - 1) * settings.step_size_um
-        galvo_amplitude_deg = piezo_travel_um / slope
+        galvo_amplitude_deg = piezo_travel_um / slope if slope else 0
 
         self._set_property(galvo, "SPIMNumSlices", num_slices_ctrl)
         self._set_property(galvo, "SingleAxisYAmplitude(deg)", round(galvo_amplitude_deg, 4))
         self._set_property(galvo, "SingleAxisYOffset(deg)", round(self.initial_galvo_y_offset, 4))
         self._set_property(piezo, "SingleAxisOffset(um)", settings.piezo_center_um)
-        # ... other SPIM properties ...
         self._set_property(galvo, "SPIMNumSlicesPerPiezo", self.const.LINE_SCANS_PER_SLICE)
         self._set_property(galvo, "SPIMScanDuration(ms)", self.const.LINE_SCAN_DURATION_MS)
         self._set_property(piezo, "SPIMNumSlices", num_slices_ctrl)
@@ -151,8 +147,6 @@ class HardwareController:
         galvo = self.const.GALVO_A_LABEL
         self._set_property(galvo, "SPIMState", "Idle")
         self._set_property(self.const.Z_PIEZO_LABEL, "SPIMState", "Idle")
-        # Restore original offsets
         self._set_property(galvo, "SingleAxisYOffset(deg)", self.initial_galvo_y_offset)
         self._set_property(self.const.Z_PIEZO_LABEL, "SingleAxisOffset(um)", settings.piezo_center_um)
-        # Set camera back to internal trigger
         self._set_property(self.const.CAMERA_A_LABEL, "TriggerMode", "Internal Trigger")

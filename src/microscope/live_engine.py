@@ -23,15 +23,20 @@ class LiveEngine(QObject):
     positions_updated = Signal(dict)
     stopped = Signal()
 
-    def __init__(self, mmc: CMMCorePlus, const: HardwareConstants):
+    def __init__(self, mmc: CMMCorePlus, const: HardwareConstants, is_demo: bool = False):
         super().__init__()
         self.mmc = mmc
         self.const = const
+        self.is_demo = is_demo
         self._running = False
         self._live = False
 
     def _execute_tiger_serial_command(self, command: str):
         """Sends a raw serial command to the Tiger controller."""
+        if self.is_demo:
+            print(f"[DEMO] Skipping serial command: {command}")
+            return
+
         hub = self.const.TIGER_COMM_HUB_LABEL
         original_setting = self.mmc.getProperty(hub, "OnlySendSerialCommandOnChange")
         if original_setting == "Yes":
@@ -62,7 +67,6 @@ class LiveEngine(QObject):
                 else:
                     time.sleep(0.005)
             else:
-                # Position Polling Mode
                 try:
                     positions = {
                         "XY-X": self.mmc.getXPosition(self.const.XY_STAGE_LABEL),
@@ -73,7 +77,8 @@ class LiveEngine(QObject):
                     }
                     self.positions_updated.emit(positions)
                 except Exception as e:
-                    print(f"Warning: Could not get stage positions: {e}")
+                    if not self.is_demo:
+                        print(f"Warning: Could not get stage positions: {e}")
                 time.sleep(0.1)
 
         print("Live Engine: Stopped.")
@@ -104,7 +109,6 @@ class LiveEngine(QObject):
         """Stops the main worker loop and cleans up."""
         if self._live:
             self.stop_live_view()
-        # Stop all stages to ensure a clean state after polling/jogging
         for device_label in [
             self.const.XY_STAGE_LABEL,
             self.const.Z_PIEZO_LABEL,
@@ -147,7 +151,6 @@ class LiveEngine(QObject):
         serial_axis_map = {"XY-X": "X", "XY-Y": "Y", "Z-Stage": "Z", "Filter-Z": "F"}
         axis = serial_axis_map.get(axis_label)
         if not axis:
-            print(f"Warn: Jogging not supported for device '{axis_label}'.")
             return
         speed_mm_per_sec = speed / 1000.0
         self._execute_tiger_serial_command(f"J {axis}={speed_mm_per_sec}")
