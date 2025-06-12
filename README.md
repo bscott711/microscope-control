@@ -1,44 +1,88 @@
-# Modular SPIM Control Application
+# Modular OPM Control Application
 
 ![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
 ![GUI Framework](https://img.shields.io/badge/GUI-PySide6-27a9e3)
 ![Code Style](https://img.shields.io/badge/code%20style-ruff-black)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-A Python-based desktop application for controlling a custom Oblique Plane Microscope using an ASI Tiger. It provides a graphical user interface for running complex, automated imaging sequences, including 4D (X, Y, Z, Time) acquisitions with live viewing and calibrated data saving.
+A Python-based desktop application for controlling a custom Oblique Plane Microscope (OPM) using an ASI Tiger controller. This project provides a graphical user interface for running automated imaging sequences with live viewing and calibrated data saving.
 
 ---
 
-## ⚠️ Project Status: Under Refactoring ⚠️
+![GUI_screenshot.png](https://raw.githubusercontent.com/bscott711/microscope-control/main/GUI_screenshot.png)
 
-This project is currently undergoing a significant architectural refactoring. The goal is to evolve from a single-script prototype into a modular, maintainable, and scalable application built on a professional-grade technical stack. The legacy Tkinter-based code is being phased out in favor of the more robust architecture outlined below.
+## ✨ Key Features
 
-### ✨ Key Features
+This application provides a solid foundation for OPM control with the following features implemented:
 
-* **Live Image Display:** Real-time camera feed displayed in the GUI without freezing.
-* **Automated 4D Acquisition:** Configure and run complex sequences with multiple Z-stacks over time.
-* **Intelligent Timing Control:** Set time intervals and automatically calculate delays, or run at the maximum possible speed.
+* **Live Image Display:** A real-time camera feed displayed in the GUI.
+* **Snap Image:** Acquire a single frame with the current settings.
+* **Automated Time-Lapse Z-Stack:** Configure and run sequences with multiple Z-stacks over time.
+* **Intelligent Timing Control:** Set time intervals between volumes or run at the maximum possible speed.
 * **Real-time Estimates:** The UI provides instant feedback on camera exposure, minimum volume time, and total acquisition duration.
-* **Calibrated OME-TIFF Saving:** Optionally save data as multi-page OME-TIFF stacks with correct `ZYX` dimensional metadata and calibrated physical units (`micron`).
+* **Calibrated OME-TIFF Saving:** Optionally save data as multi-page OME-TIFF stacks with `ZYX` dimensional metadata.
 * **Graceful Cancellation:** A responsive "Cancel" button allows for the safe and immediate termination of a running acquisition.
+* **Demo Mode:** Run the application without any physical hardware for testing and development.
 
-### 🗺️ Project Roadmap & Requirements
+## 🚀 Getting Started
 
-The detailed plan for the current refactoring, including functional and architectural requirements, is laid out in our official planning document.
+### Installation
 
-➡️ **[View the Project Requirements Document](./docs/REQUIREMENTS.md)**
+This project uses `uv` for fast package management.
 
-*(You can place the requirements document we just created in a `docs/` subdirectory and this link will work)*
+1. **Clone the repository:**
 
-### 🛠️ Technical Stack
+    ```bash
+    git clone [https://github.com/bscott711/microscope-control.git](https://github.com/bscott711/microscope-control.git)
+    cd microscope-control
+    ```
 
-This project is built with modern, high-performance tools:
+2. **Create a virtual environment and install dependencies:**
 
-| Category | Tool | Description |
-| :--- | :--- | :--- |
-| **GUI Framework** | PySide6 | Official Python bindings for the Qt6 framework. |
-| **Microscopy Control** | `pymmcore-plus` | Core library for communicating with Micro-Manager hardware. |
-| **Data Handling** | `numpy` | Foundation for all numerical and image array operations. |
-| **Image I/O** | `tifffile` | For robustly writing OME-TIFF compliant image stacks. |
-| **Package Management** | `uv` | A fast, modern tool for managing Python dependencies. |
-| **Code Quality** | `ruff` | For extremely fast code linting and formatting. |
+    ```bash
+    # Create the virtual environment
+    python -m venv .venv
+    source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+
+    # Install the project in editable mode with uv
+    uv pip install -e .[dev]
+    ```
+
+### Running the Application
+
+* **With real hardware:**
+    Make sure your hardware configuration file is correctly specified in `src/microscope/config.py`. Then, run:
+
+    ```bash
+    microscope-control
+    ```
+
+* **In Demo Mode (no hardware required):**
+    Use the `MICROSCOPE_DEMO` environment variable.
+
+    **On macOS/Linux:**
+
+    ```bash
+    MICROSCOPE_DEMO=1 microscope-control
+    ```
+
+    **On Windows (PowerShell):**
+
+    ```powershell
+    $env:MICROSCOPE_DEMO="1"
+    microscope-control
+    ```
+
+## 🛠️ Technical Stack
+
+This project is built with a modern, high-performance Python stack:
+
+| Category             | Tool                 | Description                                                  |
+| :------------------- | :------------------- | :----------------------------------------------------------- |
+| **GUI Framework** | `PySide6`              | Official Python bindings for the Qt6 framework.              |
+| **GUI Generation** | `magicgui`           | For rapidly creating Qt widgets from Python functions.       |
+| **Microscopy Control** | `pymmcore-plus`      | Core library for communicating with Micro-Manager hardware.  |
+| **Data Handling** | `numpy`              | Foundation for all numerical and image array operations.     |
+| **Image I/O** | `tifffile`           | For robustly writing OME-TIFF compliant image stacks.        |
+| **Package Management** | `uv`                 | A fast, modern tool for managing Python dependencies.        |
+| **Code Quality** | `ruff`               | For extremely fast code linting and formatting.              |
