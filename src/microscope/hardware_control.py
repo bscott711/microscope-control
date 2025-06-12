@@ -50,24 +50,37 @@ def set_property(device_label: str, property_name: str, value):
             print(f"Warning: Cannot set '{property_name}' for device '{device_label}'. Device or property not found.")
 
 
+# CORRECTED: This function now uses the more robust PULSE (PL) command for the PLogic card.
 def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
+    """
+    Configures the PLogic card to generate a fixed-duration pulse for the laser
+    every time it receives a trigger from the galvo card.
+    """
     plogic_addr = HW.plogic_label[-2:]
-    _execute_tiger_serial_command(f"{plogic_addr}CCA X={HW.plogic_laser_preset_num}")
-    _execute_tiger_serial_command(f"M E={HW.plogic_laser_on_cell}")
-    _execute_tiger_serial_command("CCA Y=14")
+
+    # Calculate the number of 4kHz clock cycles for the laser pulse duration.
     pulse_duration_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"CCA Z={pulse_duration_cycles}")
-    _execute_tiger_serial_command(f"CCB X={HW.plogic_camera_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
-    _execute_tiger_serial_command(f"M E={HW.plogic_delay_before_laser_cell}")
-    _execute_tiger_serial_command("CCA Y=13")
-    delay_cycles = int(settings.delay_before_laser_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
-    _execute_tiger_serial_command(f"M E={HW.plogic_delay_before_camera_cell}")
-    _execute_tiger_serial_command("CCA Y=13")
-    delay_cycles = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
+
+    # Use the PULSE (PL) command for the laser trigger.
+    # This command is designed for re-triggerable events.
+    # Y = Input line (from galvo), Z = Clock line, X = Output line, W = Pulse Width
+    pulse_command = (
+        f"{plogic_addr}PL Y={HW.plogic_galvo_trigger_ttl_addr} "
+        f"Z={HW.plogic_4khz_clock_addr} "
+        f"X={HW.plogic_laser_trigger_ttl_addr} "
+        f"W={pulse_duration_cycles}"
+    )
+    _execute_tiger_serial_command(pulse_command)
+
+    # The camera trigger can remain a delayed pulse/latch, as it's a simple trigger.
+    camera_delay_cycles = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
+    camera_delay_command = (
+        f"{plogic_addr}DL L={camera_delay_cycles} "
+        f"X={HW.plogic_camera_trigger_ttl_addr} "
+        f"Y={HW.plogic_galvo_trigger_ttl_addr} "
+        f"Z={HW.plogic_4khz_clock_addr}"
+    )
+    _execute_tiger_serial_command(camera_delay_command)
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -150,10 +163,7 @@ def _load_demo_config():
     mmc.loadDevice(HW.tiger_comm_hub_label, "DemoCamera", "DShutter")
     mmc.loadDevice(HW.plogic_label, "DemoCamera", "DShutter")
     mmc.initializeAllDevices()
-
-    # CORRECTED: You must tell the core which device to use as the focus drive.
     mmc.setFocusDevice(HW.piezo_a_label)
-
     mmc.definePixelSizeConfig("px")
     mmc.setPixelSizeUm("px", 1.0)
 
