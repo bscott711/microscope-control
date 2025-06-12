@@ -40,17 +40,21 @@ class HardwareConstants:
     plogic_label: str = "PLogic:E:36"
     tiger_comm_hub_label: str = "TigerCommHub"
 
-    # PLogic addresses for physical TTL lines
-    plogic_camera_trigger_ttl_addr: int = 44
-    plogic_laser_trigger_ttl_addr: int = 45
-    plogic_galvo_trigger_ttl_addr: int = 43
-    plogic_clock_source_addr: int = 192  # Internal 4kHz clock
+    # --- PLogic Addresses (corrected from user feedback) ---
+    # Physical TTL lines
+    camera_trigger_addr: int = 41  # TTL Output 0
+    laser_trigger_addr: int = 42  # TTL Output 1
+    side_select_addr: int = 44  # TTL Output 3
 
-    # PLogic Cell Assignments (from diSPIM example)
+    # Input signals to the PLogic card
+    galvo_trigger_addr: int = 43  # Input from galvo (slice start)
+    clock_source_addr: int = 192  # Internal 4kHz clock
+
+    # Internal PLogic Cell Assignments for state machine
     acquisition_flag_cell: int = 1
     laser_clock_source_cell: int = 2
     laser_counter_cell_1: int = 3
-    laser_counter_cell_2: int = 4  # Output of counter 1
+    laser_counter_cell_2: int = 4
     laser_on_cell: int = 10
     camera_delay_cell: int = 12
 
@@ -60,7 +64,6 @@ class HardwareConstants:
     pulses_per_ms: float = 4.0
     delay_before_scan_ms: float = 0.0
     line_scans_per_slice: int = 1
-    line_scan_duration_ms: float = 1.0
     num_sides: int = 1
     first_side_is_a: bool = True
     scan_opposite_directions: bool = False

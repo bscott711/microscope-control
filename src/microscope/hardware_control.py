@@ -2,7 +2,7 @@
 import os
 import time
 import traceback
-from typing import Any, Optional  # CORRECTED: Imported 'Any'
+from typing import Any, Optional
 
 from pymmcore_plus import CMMCorePlus
 
@@ -32,7 +32,6 @@ def _execute_tiger_serial_command(command_string: str):
     time.sleep(0.02)
 
 
-# CORRECTED: The type hint for a value of any type is `Any`, not the function `any`.
 def set_property(device_label: str, property_name: str, value: Any):
     if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, property_name):
         if mmc.getProperty(device_label, property_name) != str(value):
@@ -42,58 +41,72 @@ def set_property(device_label: str, property_name: str, value: Any):
             print(f"Warning: Cannot set '{property_name}' for device '{device_label}'. Device or property not found.")
 
 
-def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
+def configure_plogic_for_acquisition(settings: AcquisitionSettings):
     """
-    Configures the PLogic card based on the ASI diSPIM plugin logic.
+    Configures the PLogic card using a direct timing model based on a
+    single galvo trigger per slice.
+
+    This logic replaces the previous state machine with a more robust
+    delay/pulse generation scheme.
     """
-    plogic_addr = HW.plogic_label[-2:]
-    galvo_trigger = HW.plogic_galvo_trigger_ttl_addr
-    clock = HW.plogic_clock_source_addr
+    plogic_dev_addr = HW.plogic_label[-2:]  # e.g., "36"
+    galvo_trigger = HW.galvo_trigger_addr
+    clock = HW.clock_source_addr
 
-    # --- Clear PLogic card ---
-    _execute_tiger_serial_command(f"{plogic_addr}RM F")
-    _execute_tiger_serial_command(f"{plogic_addr}RM Z")
+    # 1. Reset the PLogic card to a clean state
+    # RM F clears all cell functions; RM Z clears all cell configurations.
+    _execute_tiger_serial_command(f"{plogic_dev_addr}RM F")
+    _execute_tiger_serial_command(f"{plogic_dev_addr}RM Z")
 
-    # --- Program Laser State Machine ---
-    # Cell 1: Acquisition Flag (SR flip-flop) -> SET by galvo, RESET by counter done
-    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.acquisition_flag_cell}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=6")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={galvo_trigger} Y={HW.laser_counter_cell_2}")
+    # 2. Configure the Camera Trigger Pulse
+    # The camera trigger is a delayed pulse. The "delay one-shot" (type 13)
+    # is perfect for this. It outputs a pulse only after a set delay.
+    delay_cycles_cam = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
 
-    # Cell 2: Gated Clock -> Passes clock only when acquisition flag is high
-    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.laser_clock_source_cell}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.acquisition_flag_cell} Y={clock}")
+    # Point to the cell that will generate the camera delay
+    _execute_tiger_serial_command(f"{plogic_dev_addr}M E={HW.camera_delay_cell}")
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCA Y=13")  # Cell Type: Delay one-shot
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCA Z={delay_cycles_cam}")
+    # Inputs: Trigger (galvo) and Clock (4kHz internal)
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCB X={galvo_trigger} Y={clock}")
 
-    # Cell 3 & 4: Laser Counter -> Counts pulses from gated clock
+    # 3. Configure the Laser Trigger Pulse
+    # The laser needs a pulse of a specific duration *after* a specific delay.
+    # This requires two cells: one for the delay, one for the pulse.
+
+    # First, create the laser delay cell (this is unused in your config, so we'll use 11)
+    laser_delay_cell = 11
+    delay_cycles_laser = int(settings.delay_before_laser_ms * HW.pulses_per_ms)
+    _execute_tiger_serial_command(f"{plogic_dev_addr}M E={laser_delay_cell}")
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCA Y=13")  # Delay one-shot
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCA Z={delay_cycles_laser}")
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCB X={galvo_trigger} Y={clock}")
+
+    # Second, create the laser "on" pulse, triggered by the delay cell.
     pulse_duration_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.laser_counter_cell_1}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=11")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Z={pulse_duration_cycles}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.laser_clock_source_cell} Y={HW.acquisition_flag_cell}")
+    # Point to the cell that generates the final laser pulse
+    _execute_tiger_serial_command(f"{plogic_dev_addr}M E={HW.laser_on_cell}")
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCA Y=14")  # Cell Type: NRT One-shot
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCA Z={pulse_duration_cycles}")
+    # Inputs: Trigger (rising edge of the laser_delay_cell) and Clock
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCB X={128 + laser_delay_cell} Y={clock}")
 
-    # Cell 10: Laser On Signal -> HIGH when Acq Flag is ON and Counter is NOT done
-    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.laser_on_cell}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.acquisition_flag_cell} Y={128 + HW.laser_counter_cell_1}")
+    # 4. Route the final cell outputs to the physical TTL BNCs
+    # Set the TTL output mode to be controlled by the PLogic card (mode 8)
+    _execute_tiger_serial_command(f"TTL X={HW.camera_trigger_addr} Y=8")
+    _execute_tiger_serial_command(f"TTL X={HW.laser_trigger_addr} Y=8")
 
-    # Route Laser On signal to the physical TTL output port
-    _execute_tiger_serial_command(f"TTL X={HW.plogic_laser_trigger_ttl_addr} Y=8")
-    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.plogic_laser_trigger_ttl_addr}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.laser_on_cell}")
+    # Connect the camera delay cell's output to the camera TTL BNC
+    _execute_tiger_serial_command(f"{plogic_dev_addr}M E={HW.camera_trigger_addr}")
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCA Y=1")  # Buffer
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCB X={HW.camera_delay_cell}")
 
-    # --- Program Camera Trigger Logic ---
-    _execute_tiger_serial_command(f"TTL X={HW.plogic_camera_trigger_ttl_addr} Y=8")
-    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.camera_delay_cell}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=13")  # One-shot DELAY
-    delay_cycles = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={galvo_trigger} Y={clock}")
-    # Route delayed trigger to physical camera output
-    _execute_tiger_serial_command(f"{plogic_addr}M E={HW.plogic_camera_trigger_ttl_addr}")
-    _execute_tiger_serial_command(f"{plogic_addr}CCA Y=1")
-    _execute_tiger_serial_command(f"{plogic_addr}CCB X={HW.camera_delay_cell}")
+    # Connect the laser "on" cell's output to the laser TTL BNC
+    _execute_tiger_serial_command(f"{plogic_dev_addr}M E={HW.laser_trigger_addr}")
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCA Y=1")  # Buffer
+    _execute_tiger_serial_command(f"{plogic_dev_addr}CCB X={HW.laser_on_cell}")
+
+    print("PLogic card configured for acquisition.")
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -124,7 +137,7 @@ def configure_devices_for_slice_scan(
 ):
     piezo_fixed_pos_um = round(settings.piezo_center_um, 3)
     set_property(HW.galvo_a_label, "BeamEnabled", "Yes")
-    configure_plogic_for_one_shot_laser(settings)
+    configure_plogic_for_acquisition(settings)
     set_property(HW.galvo_a_label, "SPIMNumSlicesPerPiezo", HW.line_scans_per_slice)
     set_property(HW.galvo_a_label, "SPIMDelayBeforeRepeat(ms)", HW.delay_before_scan_ms)
     set_property(HW.galvo_a_label, "SPIMNumRepeats", 1)
