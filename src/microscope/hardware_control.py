@@ -151,9 +151,9 @@ def _load_demo_config():
     mmc.loadDevice(HW.plogic_label, "DemoCamera", "DShutter")
     mmc.initializeAllDevices()
 
-    # CORRECTED: A pixel size "configuration" must be defined before setting
-    # the pixel size. The name of this configuration is then used to set the value.
-    # We will create a configuration named "px" as was done in the .cfg file.
+    # CORRECTED: You must tell the core which device to use as the focus drive.
+    mmc.setFocusDevice(HW.piezo_a_label)
+
     mmc.definePixelSizeConfig("px")
     mmc.setPixelSizeUm("px", 1.0)
 

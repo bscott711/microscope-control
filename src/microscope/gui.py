@@ -86,9 +86,6 @@ class AcquisitionGUI(QMainWindow):
         self._create_main_widgets()
         self._layout_widgets()
 
-        # Timer for live view
-        # CORRECTED: The QTimer must be initialized *before* it is accessed
-        # by _update_all_estimates (which is called in _connect_signals).
         self.live_timer = QTimer()
         self.live_timer.timeout.connect(self._on_live_timer)
         self.live_timer.setInterval(int(self.settings.camera_exposure_ms))
@@ -154,15 +151,15 @@ class AcquisitionGUI(QMainWindow):
         if self.acquisition_in_progress:
             return
 
+        mmc.setExposure(self.settings.camera_exposure_ms)
+
         def _snap_thread():
             try:
                 mmc.snapImage()
-                # The AcquisitionWorker's frame_ready signal is reused here
                 self.worker.signals.frame_ready.emit(mmc.getImage(), MDAEvent())
             except Exception as e:
                 print(f"Error during snap: {e}")
 
-        # A worker instance is needed to emit the signal thread-safely
         self.worker = self.AcquisitionWorker(self)
         self.worker.signals.frame_ready.connect(self.display_image)
 
@@ -177,6 +174,7 @@ class AcquisitionGUI(QMainWindow):
                 return
 
             try:
+                mmc.setExposure(self.settings.camera_exposure_ms)
                 mmc.startContinuousSequenceAcquisition(0)
                 self.live_timer.start()
                 self.run_button.setEnabled(False)
@@ -310,27 +308,28 @@ class AcquisitionGUI(QMainWindow):
                     volume_start_time = time.monotonic()
                     sequence = self._create_mda_sequence()
                     writer = self._setup_writer(t_point, params)
-                    handlers = [self._setup_plogic, self.signals.frame_ready]
-                    if writer:
-                        handlers.append(writer)
 
-                    with mda_listeners_connected(*handlers):
+                    # CORRECTED: The worker instance itself is the handler.
+                    # Its `frameReady` method will be called by the MDA engine.
+                    with mda_listeners_connected(self, writer):
                         mmc.run_mda(sequence)
 
-                    _reset_for_next_volume()
-                    self._wait_for_interval(t_point, params, volume_start_time)
+                    is_last_timepoint = t_point == params["num_time_points"] - 1
+                    if not is_last_timepoint:
+                        _reset_for_next_volume()
+                        self._wait_for_interval(params, volume_start_time)
+
             except Exception:
                 traceback.print_exc()
             finally:
                 self.signals.finished.emit()
 
         def _create_mda_sequence(self) -> MDASequence:
-            _, _, num_slices = calculate_galvo_parameters(self.gui.settings)
-            z_plan_dict = {
-                "steps": num_slices,
-                "step": self.gui.settings.step_size_um,
-            }
-            return MDASequence(z_plan=z_plan_dict) # type: ignore
+            num_slices_for_sequence = self.gui.settings.num_slices
+            step_size = self.gui.settings.step_size_um
+            z_range = (num_slices_for_sequence - 1) * step_size if num_slices_for_sequence > 1 else 0
+            z_plan_dict = {"range": z_range, "step": step_size}
+            return MDASequence(z_plan=z_plan_dict)  # type: ignore
 
         def _setup_writer(self, t_point: int, params: dict):
             if not params["should_save"]:
@@ -347,16 +346,33 @@ class AcquisitionGUI(QMainWindow):
             filepath = os.path.join(save_dir, filename)
             return OMETiffWriter(filepath)
 
-        def _setup_plogic(self, event: MDAEvent):
+        # CORRECTED: This method is now named `frameReady` so that `mda_listeners_connected`
+        # will automatically connect it to the `frameReady` signal from the MDA engine.
+        def frameReady(self, image: np.ndarray, event: MDAEvent):
+            """
+            This method is called by the MDA engine for every frame acquired.
+            """
+            # Setup PLogic on the first frame of the Z-stack
             if event.index.get("z", 0) == 0:
-                galvo_amp, galvo_center, num_slices = calculate_galvo_parameters(self.gui.settings)
-                configure_devices_for_slice_scan(self.gui.settings, galvo_amp, galvo_center, num_slices)
+                (
+                    galvo_amp,
+                    galvo_center,
+                    num_slices,
+                ) = calculate_galvo_parameters(self.gui.settings)
+                configure_devices_for_slice_scan(
+                    self.gui.settings,
+                    galvo_amp,
+                    galvo_center,
+                    num_slices,
+                )
                 mmc.setExposure(self.gui.settings.camera_exposure_ms)
                 trigger_slice_scan_acquisition()
 
-        def _wait_for_interval(self, t_point: int, params: dict, start_time: float):
-            if t_point < params["num_time_points"] - 1:
-                user_interval = params["time_interval_s"]
-                wait_time = 0 if params["minimal_interval"] else max(0, user_interval - (time.monotonic() - start_time))
-                self.signals.status.emit(f"Waiting {wait_time:.1f}s for next time point...")
-                time.sleep(wait_time)
+            # Relay the frame to the main GUI thread for display
+            self.signals.frame_ready.emit(image, event)
+
+        def _wait_for_interval(self, params: dict, start_time: float):
+            user_interval = params["time_interval_s"]
+            wait_time = 0 if params["minimal_interval"] else max(0, user_interval - (time.monotonic() - start_time))
+            self.signals.status.emit(f"Waiting {wait_time:.1f}s for next time point...")
+            time.sleep(wait_time)
