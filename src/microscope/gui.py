@@ -89,6 +89,7 @@ class AcquisitionGUI(QMainWindow):
         self.const = HardwareConstants()
         self._load_hardware_config()
 
+        # A single, shared hardware controller for the application
         self.hw_controller = HardwareController(self.mmc, self.const)
         self.acq_engine = None
         self._acq_thread = None
@@ -264,7 +265,6 @@ class AcquisitionGUI(QMainWindow):
         self._live_thread.started.connect(self.live_engine.run)
         self.live_engine.positions_updated.connect(self.nav_panel.update_positions)
         self.live_engine.new_live_image.connect(self.update_image)
-        # This signal now means the engine has fully stopped.
         self.live_engine.stopped.connect(self._on_live_engine_stopped)
 
         self._live_thread.start()
@@ -275,23 +275,19 @@ class AcquisitionGUI(QMainWindow):
             if self._live_thread.isRunning():
                 self.live_engine.stop()
                 self._live_thread.quit()
-                self._live_thread.wait(2000)  # Wait max 2s
+                self._live_thread.wait(2000)
 
     @Slot()
     def _on_run(self):
         """
         Handles the 'Run' button click.
-
-        This initiates a safe handover from the LiveEngine to the AcquisitionEngine
-        by stopping the former and starting the latter sequentially.
+        Stops the live engine and connects its stopped signal to start the acquisition.
         """
         self.live_button.setChecked(False)
         self.live_button.setEnabled(False)
         self.run_button.setEnabled(False)
         self.update_status("Stopping live engine before acquisition...")
 
-        # Connect the live engine's stopped signal to start the acquisition.
-        # This ensures the acquisition doesn't start until the live engine is down.
         if self.live_engine:
             self.live_engine.stopped.connect(self._start_acquisition_sequence)
         self._stop_live_engine()
@@ -299,17 +295,23 @@ class AcquisitionGUI(QMainWindow):
     @Slot()
     def _start_acquisition_sequence(self):
         """
-        Starts the acquisition. This is called only after the LiveEngine has
-        confirmed it has stopped.
+        Starts the acquisition. Called only after the LiveEngine has stopped.
+        This is the correct place to reset the hardware state.
         """
-        # Assign to a local variable to help the type checker.
-        engine = self.live_engine
-        if engine is not None:
-            # Disconnect the temporary signal to avoid re-triggering.
-            engine.stopped.disconnect(self._start_acquisition_sequence)
+        if self.live_engine:
+            try:
+                self.live_engine.stopped.disconnect(self._start_acquisition_sequence)
+            except (TypeError, RuntimeError):
+                pass
+
+        # THE FIX: Run the hardware cleanup routine to reset the controller's
+        # state after polling, before starting the acquisition.
+        print("Cleaning up hardware state before acquisition...")
+        settings = self._get_settings_from_gui()
+        self.hw_controller.final_cleanup(settings)
+        print("Hardware state cleaned up.")
 
         self.update_status("Starting acquisition...")
-        settings = self._get_settings_from_gui()
         self.acq_engine = AcquisitionEngine(self.hw_controller, settings)
         self._acq_thread = QThread()
         self.acq_engine.moveToThread(self._acq_thread)
@@ -343,8 +345,8 @@ class AcquisitionGUI(QMainWindow):
     def _on_live_engine_stopped(self):
         """Slot for when the live engine's run loop has fully exited."""
         print("GUI notified that Live Engine has stopped.")
-        # This is primarily for the acquisition handover, but can be used
-        # for other cleanup if needed.
+        self._live_thread = None
+        self.live_engine = None
 
     @Slot(str)
     def _on_browse(self):
@@ -392,12 +394,7 @@ class AcquisitionGUI(QMainWindow):
         This method is fast and memory-safe.
         """
         h, w = image_8bit.shape
-        # The worker thread now sends a normalized uint8 array.
-        # We can display it directly without any further processing.
         q_image = QImage(image_8bit.data, w, h, w, QImage.Format.Format_Grayscale8)
-
-        # Use .copy() to force a deep copy into Qt-managed memory. This is
-        # essential to prevent memory leaks and crashes.
         pixmap = QPixmap.fromImage(q_image.copy())
 
         self.image_display.setPixmap(
@@ -418,13 +415,17 @@ class AcquisitionGUI(QMainWindow):
         if self._acq_thread:
             self._acq_thread.quit()
             self._acq_thread.wait()
+
+        self._acq_thread = None
+        self.acq_engine = None
+
         self.run_button.setHidden(False)
         self.cancel_button.setHidden(True)
         self.cancel_button.setEnabled(True)
         self.run_button.setEnabled(True)
         self.live_button.setEnabled(True)
         self.status_bar.showMessage("Ready")
-        # Restart the live engine for position polling.
+
         self._start_live_engine()
 
     def closeEvent(self, event: QCloseEvent):
