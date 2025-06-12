@@ -63,8 +63,8 @@ class HardwareConstants:
     PLOGIC_4KHZ_CLOCK_ADDR: int = 192
     PLOGIC_LASER_ON_CELL: int = 10
     PLOGIC_LASER_PRESET_NUM: int = 5
-    PLOGIC_DELAY_BEFORE_LASER_CELL: int = 11  # ← Added
-    PLOGIC_DELAY_BEFORE_CAMERA_CELL: int = 12  # ← Added
+    PLOGIC_DELAY_BEFORE_LASER_CELL: int = 11
+    PLOGIC_DELAY_BEFORE_CAMERA_CELL: int = 12
 
     PULSES_PER_MS: float = 4.0
 

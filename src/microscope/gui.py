@@ -4,6 +4,8 @@ GUI Module
 
 This module contains the main AcquisitionGUI class, which builds and manages
 the user interface for the microscope control application using PySide6.
+It orchestrates the LiveEngine and AcquisitionEngine, delegating hardware
+control according to the pymmcore-plus design philosophy.
 """
 
 import os
@@ -27,7 +29,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QSpinBox,
-    QStatusBar,
     QVBoxLayout,
     QWidget,
 )
@@ -42,49 +43,25 @@ from .settings import AcquisitionSettings, HardwareConstants
 class AcquisitionGUI(QMainWindow):
     """The main window for the microscope control application."""
 
-    # --- Type Hint Declarations for Instance Attributes ---
-    # Core Components
     mmc: CMMCorePlus
     const: HardwareConstants
-    hw_controller: HardwareController
     acq_engine: Optional[AcquisitionEngine]
     _acq_thread: Optional[QThread]
     live_engine: Optional[LiveEngine]
     _live_thread: Optional[QThread]
+    demo_mode: bool
 
-    # UI Widgets
     nav_panel: NavigationPanel
     live_button: QPushButton
-    live_exposure_spinbox: QDoubleSpinBox
-    ts_group: QGroupBox
-    time_points_spinbox: QSpinBox
-    interval_spinbox: QDoubleSpinBox
-    minimal_interval_checkbox: QCheckBox
-    vol_group: QGroupBox
-    slices_spinbox: QSpinBox
-    step_size_spinbox: QDoubleSpinBox
-    laser_duration_spinbox: QDoubleSpinBox
-    save_group: QGroupBox
-    save_checkbox: QCheckBox
-    save_dir_entry: QLineEdit
-    browse_button: QPushButton
-    prefix_entry: QLineEdit
-    est_group: QGroupBox
-    exposure_label: QLabel
-    min_interval_label: QLabel
-    total_time_label: QLabel
-    image_display: QLabel
-    run_button: QPushButton
-    cancel_button: QPushButton
-    status_bar: QStatusBar
-    # --- End of Declarations ---
 
-    def __init__(self):
+    def __init__(self, demo_mode: bool = False):
         super().__init__()
         self.setWindowTitle("Microscope Control")
+        if demo_mode:
+            self.setWindowTitle("Microscope Control (DEMO MODE)")
         self.resize(800, 900)
 
-        # --- Initialize Core Components ---
+        self.demo_mode = demo_mode
         self.mmc = CMMCorePlus.instance()
         self.const = HardwareConstants()
         self._load_hardware_config()
@@ -96,7 +73,6 @@ class AcquisitionGUI(QMainWindow):
         self.live_engine = None
         self._live_thread = None
 
-        # --- Build the UI ---
         self._create_widgets()
         self._layout_widgets()
         self._connect_ui_signals()
@@ -111,14 +87,17 @@ class AcquisitionGUI(QMainWindow):
                 raise RuntimeError("Could not find MM. Run 'mmcore install'.")
             self.mmc.setDeviceAdapterSearchPaths([mm_path])
 
-            config_path = os.path.abspath(self.const.CFG_PATH)
-            if not os.path.exists(config_path):
-                raise FileNotFoundError(
-                    f"Hardware config file not found at: {config_path}",
-                )
+            if self.demo_mode:
+                print("Loading in DEMO mode.")
+                # The correct way to load the demo config with pymmcore-plus
+                self.mmc.loadSystemConfiguration("demo")
+            else:
+                config_path = os.path.abspath(self.const.CFG_PATH)
+                if not os.path.exists(config_path):
+                    raise FileNotFoundError(f"Hardware config file not found: {config_path}")
+                print(f"Loading hardware configuration: {config_path}")
+                self.mmc.loadSystemConfiguration(config_path)
 
-            print(f"Loading hardware configuration: {config_path}")
-            self.mmc.loadSystemConfiguration(config_path)
             print("Hardware configuration loaded successfully.")
 
         except Exception as e:
@@ -130,49 +109,25 @@ class AcquisitionGUI(QMainWindow):
         self.nav_panel = NavigationPanel()
         self.live_button = QPushButton("Live")
         self.live_button.setCheckable(True)
-        self.live_exposure_spinbox = QDoubleSpinBox(
-            minimum=1,
-            maximum=1000,
-            value=30.0,
-        )
-
+        self.live_exposure_spinbox = QDoubleSpinBox(minimum=1, maximum=1000, value=30.0)
         self.ts_group = QGroupBox("Time Series Acquisition")
         self.time_points_spinbox = QSpinBox(minimum=1, maximum=10000, value=1)
-        self.interval_spinbox = QDoubleSpinBox(
-            minimum=0,
-            maximum=3600,
-            value=1.0,
-            singleStep=0.1,
-            decimals=1,
-        )
+        self.interval_spinbox = QDoubleSpinBox(minimum=0, maximum=3600, value=1.0, singleStep=0.1, decimals=1)
         self.minimal_interval_checkbox = QCheckBox("Minimal Interval")
-
         self.vol_group = QGroupBox("Volume & Timing")
         self.slices_spinbox = QSpinBox(minimum=1, maximum=1000, value=10)
-        self.step_size_spinbox = QDoubleSpinBox(
-            minimum=0.01,
-            maximum=100.0,
-            value=1.0,
-            singleStep=0.1,
-        )
-        self.laser_duration_spinbox = QDoubleSpinBox(
-            minimum=1,
-            maximum=1000,
-            value=10.0,
-        )
-
+        self.step_size_spinbox = QDoubleSpinBox(minimum=0.01, maximum=100.0, value=1.0, singleStep=0.1)
+        self.laser_duration_spinbox = QDoubleSpinBox(minimum=1, maximum=1000, value=10.0)
         self.save_group = QGroupBox("Data Saving")
         self.save_checkbox = QCheckBox("Save to disk")
         self.save_dir_entry = QLineEdit()
         self.save_dir_entry.setReadOnly(True)
         self.browse_button = QPushButton("Browse...")
         self.prefix_entry = QLineEdit("acquisition")
-
         self.est_group = QGroupBox("Estimates")
         self.exposure_label = QLabel("...")
         self.min_interval_label = QLabel("...")
         self.total_time_label = QLabel("...")
-
         self.image_display = QLabel("Camera feed will appear here.")
         self.image_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.image_display.setStyleSheet("background-color: black; color: white;")
@@ -186,28 +141,24 @@ class AcquisitionGUI(QMainWindow):
         """Arrange all the created widgets in layouts."""
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.nav_panel)
-
         live_layout = QHBoxLayout()
         live_layout.addWidget(self.live_button)
         live_layout.addWidget(QLabel("Exposure (ms):"))
         live_layout.addWidget(self.live_exposure_spinbox)
         live_layout.addStretch()
         main_layout.addLayout(live_layout)
-
         acq_controls_layout = QHBoxLayout()
         ts_layout = QFormLayout(self.ts_group)
         ts_layout.addRow("Time Points:", self.time_points_spinbox)
         ts_layout.addRow("Interval (s):", self.interval_spinbox)
         ts_layout.addRow("", self.minimal_interval_checkbox)
         acq_controls_layout.addWidget(self.ts_group)
-
         vol_layout = QFormLayout(self.vol_group)
         vol_layout.addRow("Slices/Volume:", self.slices_spinbox)
         vol_layout.addRow("Step Size (µm):", self.step_size_spinbox)
         vol_layout.addRow("Laser Duration (ms):", self.laser_duration_spinbox)
         acq_controls_layout.addWidget(self.vol_group)
         main_layout.addLayout(acq_controls_layout)
-
         save_layout = QGridLayout(self.save_group)
         save_layout.addWidget(self.save_checkbox, 0, 0)
         save_layout.addWidget(self.save_dir_entry, 0, 1)
@@ -215,21 +166,17 @@ class AcquisitionGUI(QMainWindow):
         save_layout.addWidget(QLabel("File Prefix:"), 0, 3)
         save_layout.addWidget(self.prefix_entry, 0, 4)
         main_layout.addWidget(self.save_group)
-
         est_layout = QFormLayout(self.est_group)
         est_layout.addRow("Camera Exposure (ms):", self.exposure_label)
         est_layout.addRow("Min. Interval/Volume (s):", self.min_interval_label)
         est_layout.addRow("Estimated Total Time:", self.total_time_label)
         main_layout.addWidget(self.est_group)
-
         main_layout.addWidget(self.image_display, stretch=1)
-
         bottom_button_layout = QHBoxLayout()
         bottom_button_layout.addWidget(self.run_button)
         bottom_button_layout.addWidget(self.cancel_button)
         bottom_button_layout.addStretch()
         main_layout.addLayout(bottom_button_layout)
-
         central_widget = QWidget()
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
@@ -239,17 +186,15 @@ class AcquisitionGUI(QMainWindow):
         self.browse_button.clicked.connect(self._on_browse)
         self.run_button.clicked.connect(self._on_run)
         self.cancel_button.clicked.connect(self._on_cancel)
-        self.minimal_interval_checkbox.toggled.connect(
-            self.interval_spinbox.setDisabled,
-        )
+        self.minimal_interval_checkbox.toggled.connect(self.interval_spinbox.setDisabled)
         self.live_button.toggled.connect(self._on_live_toggled)
-
-        for widget in (
+        param_widgets = [
             self.time_points_spinbox,
             self.interval_spinbox,
             self.slices_spinbox,
             self.laser_duration_spinbox,
-        ):
+        ]
+        for widget in param_widgets:
             widget.valueChanged.connect(self._update_estimates)
         self.minimal_interval_checkbox.stateChanged.connect(self._update_estimates)
 
@@ -258,15 +203,17 @@ class AcquisitionGUI(QMainWindow):
         if self._live_thread and self._live_thread.isRunning():
             return
 
-        self.live_engine = LiveEngine(self.hw_controller)
+        self.live_engine = LiveEngine(self.mmc, self.const, is_demo=self.demo_mode)
         self._live_thread = QThread()
         self.live_engine.moveToThread(self._live_thread)
-
         self._live_thread.started.connect(self.live_engine.run)
         self.live_engine.positions_updated.connect(self.nav_panel.update_positions)
         self.live_engine.new_live_image.connect(self.update_image)
         self.live_engine.stopped.connect(self._on_live_engine_stopped)
-
+        self.nav_panel.move_to_requested.connect(self.live_engine.move_stage_to)
+        self.nav_panel.move_by_requested.connect(self.live_engine.move_stage_by)
+        self.nav_panel.jog_started.connect(self.live_engine.start_jog)
+        self.nav_panel.jog_stopped.connect(self.live_engine.stop_jog)
         self._live_thread.start()
 
     def _stop_live_engine(self):
@@ -315,18 +262,17 @@ class AcquisitionGUI(QMainWindow):
         self.acq_engine = AcquisitionEngine(self.hw_controller, settings)
         self._acq_thread = QThread()
         self.acq_engine.moveToThread(self._acq_thread)
-
         self._acq_thread.started.connect(self.acq_engine.run_acquisition)
         self.acq_engine.acquisition_finished.connect(self.on_acquisition_finished)
         self.acq_engine.new_image_ready.connect(self.update_image)
         self.acq_engine.status_updated.connect(self.update_status)
-
         self.run_button.setHidden(True)
         self.cancel_button.setHidden(False)
         self._acq_thread.start()
 
     @Slot()
     def _on_cancel(self):
+        """Requests the acquisition engine to stop."""
         if self.acq_engine:
             self.acq_engine.cancel()
         self.cancel_button.setEnabled(False)
@@ -334,22 +280,23 @@ class AcquisitionGUI(QMainWindow):
 
     @Slot(bool)
     def _on_live_toggled(self, checked: bool):
-        if not self.live_engine:
-            return
-        if checked:
-            self.live_engine.start_live_view(self.live_exposure_spinbox.value())
-        else:
-            self.live_engine.stop_live_view()
+        """Handles the Live button state change."""
+        if self.live_engine:
+            if checked:
+                self.live_engine.start_live_view(self.live_exposure_spinbox.value())
+            else:
+                self.live_engine.stop_live_view()
 
     @Slot()
     def _on_live_engine_stopped(self):
-        """Slot for when the live engine's run loop has fully exited."""
+        """Cleans up after the live engine thread has fully exited."""
         print("GUI notified that Live Engine has stopped.")
         self._live_thread = None
         self.live_engine = None
 
     @Slot(str)
     def _on_browse(self):
+        """Opens a dialog to select a save directory."""
         directory = QFileDialog.getExistingDirectory(self, "Select Save Directory")
         if directory:
             self.save_dir_entry.setText(directory)
@@ -359,19 +306,16 @@ class AcquisitionGUI(QMainWindow):
         """Calculates and updates the timing estimates in the GUI."""
         settings = self._get_settings_from_gui()
         self.exposure_label.setText(f"{settings.camera_exposure_ms:.2f}")
-        overhead_factor = 1.10
-        total_exposure_ms = settings.num_slices * settings.camera_exposure_ms
-        min_interval_s = (total_exposure_ms * overhead_factor) / 1000.0
+        overhead = 1.10
+        min_interval_s = (settings.num_slices * settings.camera_exposure_ms * overhead) / 1000.0
         self.min_interval_label.setText(f"{min_interval_s:.2f}")
-        if settings.is_minimal_interval:
-            time_per_volume = min_interval_s
-        else:
-            time_per_volume = max(settings.time_interval_s, min_interval_s)
-        total_seconds = time_per_volume * settings.time_points
-        h = int(total_seconds // 3600)
-        m = int((total_seconds % 3600) // 60)
-        s = int(total_seconds % 60)
-        self.total_time_label.setText(f"{h:02d}:{m:02d}:{s:02d}")
+        time_per_vol = (
+            max(settings.time_interval_s, min_interval_s) if not settings.is_minimal_interval else min_interval_s
+        )
+        total_seconds = time_per_vol * settings.time_points
+        h, rem = divmod(total_seconds, 3600)
+        m, s = divmod(rem, 60)
+        self.total_time_label.setText(f"{int(h):02d}:{int(m):02d}:{int(s):02d}")
 
     def _get_settings_from_gui(self) -> AcquisitionSettings:
         """Creates an AcquisitionSettings object from the current GUI values."""
@@ -389,24 +333,21 @@ class AcquisitionGUI(QMainWindow):
 
     @Slot(np.ndarray)
     def update_image(self, image_8bit: np.ndarray):
-        """
-        Converts a normalized 8-bit numpy array to a QPixmap for display.
-        This method is fast and memory-safe.
-        """
+        """Converts a normalized 8-bit numpy array to a QPixmap for display."""
         h, w = image_8bit.shape
         q_image = QImage(image_8bit.data, w, h, w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(q_image.copy())
-
         self.image_display.setPixmap(
             pixmap.scaled(
                 self.image_display.size(),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
-            ),
+            )
         )
 
     @Slot(str)
     def update_status(self, message: str):
+        """Updates the status bar message."""
         self.status_bar.showMessage(message)
 
     @Slot()
@@ -421,7 +362,6 @@ class AcquisitionGUI(QMainWindow):
 
         self.run_button.setHidden(False)
         self.cancel_button.setHidden(True)
-        self.cancel_button.setEnabled(True)
         self.run_button.setEnabled(True)
         self.live_button.setEnabled(True)
         self.status_bar.showMessage("Ready")
@@ -433,6 +373,5 @@ class AcquisitionGUI(QMainWindow):
         if self.acq_engine and self.acq_engine._is_running:
             self._on_cancel()
             self.on_acquisition_finished()
-
         self._stop_live_engine()
         event.accept()
