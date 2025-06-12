@@ -1,5 +1,6 @@
 # microscope/gui.py
 import os
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -8,7 +9,7 @@ import numpy as np
 from magicgui import magicgui
 from pymmcore_plus.mda import mda_listeners_connected
 from pymmcore_plus.mda.handlers import OMETiffWriter
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QFormLayout,
@@ -43,8 +44,6 @@ class WorkerSignals(QObject):
     frame_ready = Signal(np.ndarray, MDAEvent)
 
 
-# CORRECTED: Explicitly set the widget_type for `save_dir` to 'FileEdit'
-# to ensure it can accept the `mode='d'` argument.
 @magicgui(
     call_button=False,
     layout="form",
@@ -86,6 +85,14 @@ class AcquisitionGUI(QMainWindow):
 
         self._create_main_widgets()
         self._layout_widgets()
+
+        # Timer for live view
+        # CORRECTED: The QTimer must be initialized *before* it is accessed
+        # by _update_all_estimates (which is called in _connect_signals).
+        self.live_timer = QTimer()
+        self.live_timer.timeout.connect(self._on_live_timer)
+        self.live_timer.setInterval(int(self.settings.camera_exposure_ms))
+
         self._connect_signals()
         self._update_all_estimates()
 
@@ -95,6 +102,10 @@ class AcquisitionGUI(QMainWindow):
         self.image_display = QLabel("Camera Image")
         self.image_display.setMinimumSize(512, 512)
         self.image_display.setStyleSheet("background-color: black;")
+
+        self.snap_button = QPushButton("Snap")
+        self.live_button = QPushButton("Live")
+        self.live_button.setCheckable(True)
         self.run_button = QPushButton("Run Time Series")
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
@@ -120,17 +131,73 @@ class AcquisitionGUI(QMainWindow):
         grid_layout.addWidget(self.estimates_widget, 0, 1)
         main_layout.addLayout(grid_layout)
         main_layout.addWidget(self.image_display)
+
         button_layout = QHBoxLayout()
+        button_layout.addWidget(self.snap_button)
+        button_layout.addWidget(self.live_button)
+        button_layout.addStretch()
         button_layout.addWidget(self.run_button)
         button_layout.addWidget(self.cancel_button)
-        button_layout.addStretch()
         main_layout.addLayout(button_layout)
+
         self.setCentralWidget(central_widget)
 
     def _connect_signals(self):
+        self.snap_button.clicked.connect(self._on_snap)
+        self.live_button.toggled.connect(self._on_live_toggled)
         self.run_button.clicked.connect(self.start_time_series)
         self.cancel_button.clicked.connect(self._request_cancel)
         acquisition_widget.changed.connect(self._update_all_estimates)
+
+    @Slot()
+    def _on_snap(self):
+        if self.acquisition_in_progress:
+            return
+
+        def _snap_thread():
+            try:
+                mmc.snapImage()
+                # The AcquisitionWorker's frame_ready signal is reused here
+                self.worker.signals.frame_ready.emit(mmc.getImage(), MDAEvent())
+            except Exception as e:
+                print(f"Error during snap: {e}")
+
+        # A worker instance is needed to emit the signal thread-safely
+        self.worker = self.AcquisitionWorker(self)
+        self.worker.signals.frame_ready.connect(self.display_image)
+
+        snap_thread = threading.Thread(target=_snap_thread)
+        snap_thread.start()
+
+    @Slot(bool)
+    def _on_live_toggled(self, checked: bool):
+        if checked:
+            if self.acquisition_in_progress:
+                self.live_button.setChecked(False)
+                return
+
+            try:
+                mmc.startContinuousSequenceAcquisition(0)
+                self.live_timer.start()
+                self.run_button.setEnabled(False)
+                self.snap_button.setEnabled(False)
+                self.statusBar().showMessage("Live view running...")
+            except Exception as e:
+                print(f"Error starting live view: {e}")
+                self.live_button.setChecked(False)
+        else:
+            self.live_timer.stop()
+            if mmc.isSequenceRunning():
+                mmc.stopSequenceAcquisition()
+            self.run_button.setEnabled(True)
+            self.snap_button.setEnabled(True)
+            self.statusBar().showMessage("Live view stopped.", 3000)
+
+    @Slot()
+    def _on_live_timer(self):
+        if mmc.getRemainingImageCount() > 0:
+            image = mmc.getLastImage()
+            self.display_image(image, MDAEvent())
 
     @Slot()
     def _update_all_estimates(self):
@@ -138,7 +205,11 @@ class AcquisitionGUI(QMainWindow):
         self.settings.num_slices = params["num_slices"]
         self.settings.laser_trig_duration_ms = params["laser_trig_duration_ms"]
         self.settings.step_size_um = params["step_size_um"]
-        self.cam_exposure_label.setText(f"{self.settings.camera_exposure_ms:.2f} ms")
+
+        exposure = self.settings.camera_exposure_ms
+        self.cam_exposure_label.setText(f"{exposure:.2f} ms")
+        self.live_timer.setInterval(int(exposure))
+
         min_interval_s = self._calculate_minimal_interval()
         self.min_interval_label.setText(f"{min_interval_s:.2f} s")
         self.total_time_label.setText(self._calculate_total_time(min_interval_s, params["num_time_points"]))
@@ -159,11 +230,16 @@ class AcquisitionGUI(QMainWindow):
     def start_time_series(self):
         if self.acquisition_in_progress:
             return
+
+        if self.live_button.isChecked():
+            self.live_button.setChecked(False)
+
         try:
             self.pixel_size_um = mmc.getPixelSizeUm() or 1.0
         except Exception:
             self.pixel_size_um = 1.0
             self.statusBar().showMessage("Warning: Could not get pixel size.", 3000)
+
         self._set_controls_enabled(False)
 
         self.acquisition_thread = QThread()
@@ -189,6 +265,8 @@ class AcquisitionGUI(QMainWindow):
     def _set_controls_enabled(self, enabled: bool):
         self.controls_widget.setEnabled(enabled)
         self.run_button.setEnabled(enabled)
+        self.live_button.setEnabled(enabled)
+        self.snap_button.setEnabled(enabled)
         self.cancel_button.setEnabled(not enabled)
         self.acquisition_in_progress = not enabled
 
@@ -227,6 +305,7 @@ class AcquisitionGUI(QMainWindow):
                 for t_point in range(params["num_time_points"]):
                     if mmc.mda.is_paused():
                         break
+
                     self.signals.status.emit(f"Running Time Point {t_point + 1}/{params['num_time_points']}")
                     volume_start_time = time.monotonic()
                     sequence = self._create_mda_sequence()
@@ -234,8 +313,10 @@ class AcquisitionGUI(QMainWindow):
                     handlers = [self._setup_plogic, self.signals.frame_ready]
                     if writer:
                         handlers.append(writer)
+
                     with mda_listeners_connected(*handlers):
                         mmc.run_mda(sequence)
+
                     _reset_for_next_volume()
                     self._wait_for_interval(t_point, params, volume_start_time)
             except Exception:
@@ -249,17 +330,18 @@ class AcquisitionGUI(QMainWindow):
                 "steps": num_slices,
                 "step": self.gui.settings.step_size_um,
             }
-            sequence = MDASequence(z_plan=z_plan_dict)  # type: ignore
-            return sequence
+            return MDASequence(z_plan=z_plan_dict) # type: ignore
 
         def _setup_writer(self, t_point: int, params: dict):
             if not params["should_save"]:
                 return None
+
             save_dir = params["save_dir"]
             prefix = params["save_prefix"]
             if not save_dir or not prefix:
                 self.signals.status.emit("Error: Save directory or prefix missing.")
                 return None
+
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{prefix}_T{t_point + 1:04d}_{timestamp}.tif"
             filepath = os.path.join(save_dir, filename)
@@ -267,11 +349,7 @@ class AcquisitionGUI(QMainWindow):
 
         def _setup_plogic(self, event: MDAEvent):
             if event.index.get("z", 0) == 0:
-                (
-                    galvo_amp,
-                    galvo_center,
-                    num_slices,
-                ) = calculate_galvo_parameters(self.gui.settings)
+                galvo_amp, galvo_center, num_slices = calculate_galvo_parameters(self.gui.settings)
                 configure_devices_for_slice_scan(self.gui.settings, galvo_amp, galvo_center, num_slices)
                 mmc.setExposure(self.gui.settings.camera_exposure_ms)
                 trigger_slice_scan_acquisition()

@@ -2,10 +2,11 @@
 import os
 import time
 import traceback
-from typing import List, Optional
+from typing import Optional
 
-from .config import AcquisitionSettings, HW, USE_DEMO_CONFIG
 from pymmcore_plus import CMMCorePlus
+
+from .config import HW, USE_DEMO_CONFIG, AcquisitionSettings
 
 mmc = CMMCorePlus.instance()
 
@@ -29,9 +30,7 @@ def _execute_tiger_serial_command(command_string: str):
         )
         return
 
-    original_setting = mmc.getProperty(
-        HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange"
-    )
+    original_setting = mmc.getProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange")
     if original_setting == "Yes":
         mmc.setProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange", "No")
 
@@ -43,17 +42,12 @@ def _execute_tiger_serial_command(command_string: str):
 
 
 def set_property(device_label: str, property_name: str, value):
-    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(
-        device_label, property_name
-    ):
+    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, property_name):
         if mmc.getProperty(device_label, property_name) != str(value):
             mmc.setProperty(device_label, property_name, value)
     else:
         if not USE_DEMO_CONFIG:
-            print(
-                f"Warning: Cannot set '{property_name}' for device '{device_label}'. "
-                "Device or property not found."
-            )
+            print(f"Warning: Cannot set '{property_name}' for device '{device_label}'. Device or property not found.")
 
 
 def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
@@ -63,23 +57,17 @@ def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
     _execute_tiger_serial_command("CCA Y=14")
     pulse_duration_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
     _execute_tiger_serial_command(f"CCA Z={pulse_duration_cycles}")
-    _execute_tiger_serial_command(
-        f"CCB X={HW.plogic_camera_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}"
-    )
+    _execute_tiger_serial_command(f"CCB X={HW.plogic_camera_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
     _execute_tiger_serial_command(f"M E={HW.plogic_delay_before_laser_cell}")
     _execute_tiger_serial_command("CCA Y=13")
     delay_cycles = int(settings.delay_before_laser_ms * HW.pulses_per_ms)
     _execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(
-        f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}"
-    )
+    _execute_tiger_serial_command(f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
     _execute_tiger_serial_command(f"M E={HW.plogic_delay_before_camera_cell}")
     _execute_tiger_serial_command("CCA Y=13")
     delay_cycles = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
     _execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(
-        f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}"
-    )
+    _execute_tiger_serial_command(f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -91,9 +79,7 @@ def calculate_galvo_parameters(settings: AcquisitionSettings):
         if num_slices_ctrl > 1:
             piezo_amplitude_um *= float(num_slices_ctrl) / (num_slices_ctrl - 1.0)
         num_slices_ctrl += 1
-    galvo_slice_amplitude_deg = (
-        piezo_amplitude_um / HW.slice_calibration_slope_um_per_deg
-    )
+    galvo_slice_amplitude_deg = piezo_amplitude_um / HW.slice_calibration_slope_um_per_deg
     galvo_slice_center_deg = (
         settings.piezo_center_um - HW.slice_calibration_offset_um
     ) / HW.slice_calibration_slope_um_per_deg
@@ -190,9 +176,7 @@ class HardwareInterface:
                 raise
 
         if not self.config_path or not os.path.exists(self.config_path):
-            raise FileNotFoundError(
-                f"Hardware config file not found at '{self.config_path}'"
-            )
+            raise FileNotFoundError(f"Hardware config file not found at '{self.config_path}'")
 
         print(f"Attempting to load configuration: '{self.config_path}'")
         try:
@@ -206,9 +190,7 @@ class HardwareInterface:
     def camera1(self) -> str:
         return HW.camera_a_label
 
-    def find_and_set_trigger_mode(
-        self, camera_label: str, desired_modes: List[str]
-    ) -> bool:
+    def find_and_set_trigger_mode(self, camera_label: str, desired_modes: list[str]) -> bool:
         if camera_label not in mmc.getLoadedDevices():
             return False
         trigger_prop = "TriggerMode"
