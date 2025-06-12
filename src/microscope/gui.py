@@ -14,6 +14,7 @@ from PIL import Image, ImageTk
 from .config import AcquisitionSettings
 from .hardware_control import (
     HardwareInterface,
+    _reset_for_next_volume,  # Correctly import the specific reset function
     calculate_galvo_parameters,
     configure_devices_for_slice_scan,
     final_cleanup,
@@ -365,7 +366,7 @@ class AcquisitionGUI:
             f"Volume {self.current_time_point} acquired in {volume_duration:.2f} seconds."
         )
         self._save_current_volume()
-        final_cleanup(self.settings)  # Resets for next volume
+        _reset_for_next_volume()  # CORRECTED: Use the specific reset function
         if self.current_time_point >= self.time_points_total:
             self._finish_time_series()
         else:
@@ -383,7 +384,7 @@ class AcquisitionGUI:
             print("\n--- Acquisition Cancelled by User ---")
         else:
             print("\n--- Time Series Complete ---")
-        final_cleanup(self.settings)
+        final_cleanup(self.settings)  # This is the correct place for final_cleanup
         self.hw_interface.find_and_set_trigger_mode(
             self.hw_interface.camera1, ["Internal", "Internal Trigger"]
         )
