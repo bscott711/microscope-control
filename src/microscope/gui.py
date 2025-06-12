@@ -80,7 +80,7 @@ class AcquisitionGUI(QMainWindow):
         self.setMinimumSize(600, 700)
 
         self.acquisition_in_progress = False
-        self.cancel_requested = False  # Initialize cancellation flag
+        self.cancel_requested = False
         self.pixel_size_um = 1.0
 
         self._create_main_widgets()
@@ -239,7 +239,7 @@ class AcquisitionGUI(QMainWindow):
             self.statusBar().showMessage("Warning: Could not get pixel size.", 3000)
 
         self._set_controls_enabled(False)
-        self.cancel_requested = False  # Reset the flag at the start of an acquisition
+        self.cancel_requested = False
 
         self.acquisition_thread = QThread()
         self.worker = self.AcquisitionWorker(self)
@@ -259,7 +259,7 @@ class AcquisitionGUI(QMainWindow):
     def _request_cancel(self):
         if self.acquisition_in_progress:
             self.statusBar().showMessage("Cancellation requested...")
-            self.cancel_requested = True  # CORRECTED: Set the flag
+            self.cancel_requested = True
             mmc.stopSequenceAcquisition()
 
     def _set_controls_enabled(self, enabled: bool):
@@ -272,11 +272,9 @@ class AcquisitionGUI(QMainWindow):
 
     @Slot()
     def _finish_time_series(self):
-        # CORRECTED: Base the final status on the cancellation flag
         status = "Cancelled" if self.cancel_requested else "Acquisition finished."
         self.statusBar().showMessage(status, 5000)
 
-        # Ensure the sequence is stopped if it's still running (e.g., due to cancel)
         if mmc.isSequenceRunning():
             mmc.stopSequenceAcquisition()
 
@@ -310,7 +308,6 @@ class AcquisitionGUI(QMainWindow):
                 mmc.setCameraDevice(self.gui.hw_interface.camera1)
 
                 for t_point in range(params["num_time_points"]):
-                    # CORRECTED: Check for cancellation at the start of each time point
                     if self.gui.cancel_requested:
                         break
 
@@ -335,7 +332,6 @@ class AcquisitionGUI(QMainWindow):
 
                     popped_images = 0
                     while mmc.isSequenceRunning() or mmc.getRemainingImageCount() > 0:
-                        # CORRECTED: Check for cancellation within the polling loop
                         if self.gui.cancel_requested:
                             break
                         if mmc.getRemainingImageCount() > 0:
@@ -343,14 +339,18 @@ class AcquisitionGUI(QMainWindow):
                             popped_images += 1
 
                             event = MDAEvent(
-                                index={"t": t_point, "z": popped_images - 1}, # type: ignore
+                                index={"t": t_point, "z": popped_images - 1},  # type: ignore
                                 metadata=tagged_img.tags,
                             )
 
                             self.signals.frame_ready.emit(tagged_img.pix, event)
 
                             if writer:
-                                writer.frameReady(tagged_img.pix, event, tagged_img.tags) # type: ignore
+                                writer.frameReady(
+                                    tagged_img.pix,
+                                    event,
+                                    tagged_img.tags,  # type: ignore
+                                )
 
                             self.signals.status.emit(f"Time Point {t_point + 1} | Slice {popped_images}/{num_slices}")
                         else:
@@ -373,7 +373,7 @@ class AcquisitionGUI(QMainWindow):
             step_size = self.gui.settings.step_size_um
             z_range = (num_slices - 1) * step_size if num_slices > 1 else 0
             z_plan_dict = {"range": z_range, "step": step_size}
-            return MDASequence(z_plan=z_plan_dict) # type: ignore
+            return MDASequence(z_plan=z_plan_dict)  # type: ignore
 
         def _setup_writer(self, t_point: int, params: dict):
             if not params["should_save"]:
@@ -392,9 +392,19 @@ class AcquisitionGUI(QMainWindow):
             return OMETiffWriter(filepath)
 
         def _wait_for_interval(self, params: dict, start_time: float):
+            """
+            Wait for the specified interval, but in an interruptible way.
+            """
             user_interval = params["time_interval_s"]
             wait_time = 0 if params["minimal_interval"] else max(0, user_interval - (time.monotonic() - start_time))
-            # CORRECTED: Check for cancellation again before sleeping
-            if not self.gui.cancel_requested:
-                self.signals.status.emit(f"Waiting {wait_time:.1f}s for next time point...")
-                time.sleep(wait_time)
+
+            # CORRECTED: Instead of one long sleep, we sleep in short chunks
+            # and check for cancellation in between.
+            wait_start = time.monotonic()
+            while time.monotonic() - wait_start < wait_time:
+                if self.gui.cancel_requested:
+                    break  # Exit the wait if cancellation is requested
+
+                remaining = wait_time - (time.monotonic() - wait_start)
+                self.signals.status.emit(f"Waiting {remaining:.1f}s for next time point...")
+                time.sleep(0.1)  # Sleep in 100ms chunks
