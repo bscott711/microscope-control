@@ -39,6 +39,7 @@ target-version = "py39"
 exclude = [
   "initial_testing_scripts",
   "docs",
+  "tests",
 ]
 line-length = 120
 
