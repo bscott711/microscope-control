@@ -65,24 +65,31 @@ class HardwareAbstractionLayer:
         the main controller classes for debugging purposes.
         """
         print("\n--- Starting Validated Test Sequence ---")
+        initial_camera = mmc.getCameraDevice()
         initial_auto_shutter = mmc.getAutoShutter()
         initial_exposure = mmc.getExposure()
-        initial_trigger_mode = self.camera.mmc.getProperty(self.camera.label, "TriggerMode")
+        initial_trigger_mode = "Internal Trigger"  # Default value
 
         try:
             # 1. Setup
+            print(f"Validated Test: Setting active camera to {self.camera.label}")
+            mmc.setCameraDevice(self.camera.label)
+
+            # Now that Camera-1 is active, get its initial trigger mode
+            initial_trigger_mode = self.camera.mmc.getProperty(self.camera.label, "TriggerMode")
+
             mmc.setAutoShutter(False)
             mmc.setConfig("Lasers", "488nm")
             self.camera.set_trigger_mode("Edge Trigger")
             mmc.setExposure(settings.camera_exposure_ms)
-            self.galvo.configure_for_scan(settings)  # Uses corrected galvo logic
-            self.plogic.program_for_acquisition(settings)  # Uses corrected plogic logic
+            self.galvo.configure_for_scan(settings)
+            self.plogic.program_for_acquisition(settings)
             mmc.waitForSystem()
             print("Validated Test: Devices configured.")
 
             # 2. Execution
             mmc.startSequenceAcquisition(self.camera.label, settings.num_slices, 0, True)
-            self.galvo.start()  # Sends the master trigger
+            self.galvo.start()
             while mmc.isSequenceRunning(self.camera.label):
                 time.sleep(0.05)
             print("Validated Test: Sequence complete.")
@@ -92,13 +99,22 @@ class HardwareAbstractionLayer:
             print("Validated Test: Cleaning up...")
             if mmc.isSequenceRunning(self.camera.label):
                 mmc.stopSequenceAcquisition(self.camera.label)
+
             self.galvo.set_idle()
             self.stage.set_idle()
             self.plogic.cleanup()
             self.camera.set_trigger_mode(initial_trigger_mode)
             mmc.setExposure(initial_exposure)
             mmc.setAutoShutter(initial_auto_shutter)
+
+            # --- FIX: Reordered cleanup sequence ---
+            # 1. Wait for the system to be idle WHILE Camera-1 is still active.
             mmc.waitForSystem()
+
+            # 2. THEN restore the original camera device as the very last step.
+            print(f"Validated Test: Restoring active camera to {initial_camera}")
+            mmc.setCameraDevice(initial_camera)
+
             print("--- Validated Test Finished ---")
 
     # --- Private Implementation ---
