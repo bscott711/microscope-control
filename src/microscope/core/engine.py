@@ -1,13 +1,7 @@
 # src/microscope/core/engine.py
-"""
-Acquisition Engine Module
-
-This module contains the core logic for running acquisition sequences. It is
-designed to be run in a separate thread from the GUI to ensure responsiveness.
-"""
-
 import os
 import time
+import traceback
 from datetime import datetime
 
 import numpy as np
@@ -15,36 +9,24 @@ import tifffile
 from PySide6.QtCore import QObject, Signal
 
 from ..config import AcquisitionSettings
-from ..hardware.hardware_control import (
-    HardwareInterface,
-    _reset_for_next_volume,
-    calculate_galvo_parameters,
-    configure_devices_for_slice_scan,
-    final_cleanup,
-    mmc,
-    trigger_slice_scan_acquisition,
-)
+
+# Updated import for the new HAL
+from ..hardware.hal import HardwareAbstractionLayer, mmc
 
 
 class AcquisitionEngine(QObject):
     """
     The core engine for managing acquisition sequences.
-
-    It runs in a separate worker thread and communicates with the GUI via signals.
     """
 
     new_image_ready = Signal(np.ndarray)
     status_updated = Signal(str)
     acquisition_finished = Signal()
 
-    def __init__(
-        self,
-        hw_interface: HardwareInterface,
-        acq_settings: AcquisitionSettings,
-    ):
+    def __init__(self, hal: HardwareAbstractionLayer, settings: AcquisitionSettings):
         super().__init__()
-        self.hw = hw_interface
-        self.settings = acq_settings
+        self.hal = hal
+        self.settings = settings
         self._is_running = False
         self._cancel_requested = False
         self.pixel_size_um = 1.0
@@ -64,45 +46,40 @@ class AcquisitionEngine(QObject):
                     self.status_updated.emit("Acquisition cancelled.")
                     break
 
-                current_time_point = t + 1
-                self.status_updated.emit(f"Starting Time Point {current_time_point}/{self.settings.time_points}...")
+                self.status_updated.emit(f"Starting Time Point {t + 1}/{self.settings.time_points}...")
                 volume_start_time = time.monotonic()
                 self.current_volume_images.clear()
 
-                (galvo_amp, galvo_center, num_slices) = calculate_galvo_parameters(self.settings)
-                configure_devices_for_slice_scan(self.settings, galvo_amp, galvo_center, num_slices)
-
-                self._acquire_volume(num_slices)
+                # Simplified calls to the HAL
+                self.hal.setup_for_acquisition(self.settings)
+                self._acquire_volume()
 
                 if self._cancel_requested:
                     self.status_updated.emit("Acquisition cancelled.")
                     break
 
-                self._save_current_volume(current_time_point)
+                self._save_current_volume(t + 1)
 
-                if current_time_point < self.settings.time_points:
-                    volume_duration = time.monotonic() - volume_start_time
-                    delay = self._calculate_inter_volume_delay(volume_duration)
+                if t < self.settings.time_points - 1:
+                    duration = time.monotonic() - volume_start_time
+                    delay = self._calculate_inter_volume_delay(duration)
                     self.status_updated.emit(f"Waiting {delay:.1f}s for next time point...")
-                    _reset_for_next_volume()
                     time.sleep(delay)
 
         except Exception as e:
             self.status_updated.emit(f"Error: {e}")
-            print(f"An error occurred in the acquisition engine: {e}")
-            import traceback
-
             traceback.print_exc()
         finally:
             print("Engine finishing up...")
-            final_cleanup(self.settings)
+            self.hal.final_cleanup(self.settings)
             self.acquisition_finished.emit()
             self._is_running = False
 
-    def _acquire_volume(self, num_slices: int):
+    def _acquire_volume(self):
         """Acquires a single Z-stack."""
+        num_slices = self.settings.num_slices  # Use settings directly
         mmc.startSequenceAcquisition(num_slices, 0, True)
-        trigger_slice_scan_acquisition()
+        self.hal.start_acquisition()
 
         images_acquired = 0
         while images_acquired < num_slices:
@@ -121,10 +98,9 @@ class AcquisitionEngine(QObject):
         mmc.stopSequenceAcquisition()
 
     def _save_current_volume(self, time_point: int):
-        """Saves the collected images for the most recent volume."""
         if not self.settings.should_save or not self.current_volume_images:
             return
-
+        # ... (rest of the save logic is unchanged)
         save_dir = self.settings.save_dir
         prefix = self.settings.save_prefix
         if not save_dir or not prefix:
@@ -154,12 +130,10 @@ class AcquisitionEngine(QObject):
             print(f"Error saving file: {e}")
 
     def _calculate_inter_volume_delay(self, volume_duration: float) -> float:
-        """Calculates the necessary pause between volumes."""
         if self.settings.is_minimal_interval:
             return 0.0
         return max(0, self.settings.time_interval_s - volume_duration)
 
     def cancel(self):
-        """Flags the acquisition to be cancelled safely."""
         if self._is_running:
             self._cancel_requested = True

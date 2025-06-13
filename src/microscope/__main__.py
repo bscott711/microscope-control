@@ -4,9 +4,10 @@ import traceback
 
 from PySide6.QtWidgets import QApplication
 
-# Corrected imports for the new structure
 from .config import HW
-from .hardware.hardware_control import HardwareInterface, mmc
+
+# Corrected import for the new HAL structure
+from .hardware.hal import HardwareAbstractionLayer, mmc
 from .ui.main_window import AcquisitionGUI
 
 
@@ -17,8 +18,9 @@ def main():
         app = QApplication(sys.argv)
 
     try:
-        hw_interface = HardwareInterface(config_file_path=HW.cfg_path)
-        window = AcquisitionGUI(hw_interface)
+        # Instantiate the new HAL
+        hal = HardwareAbstractionLayer(config_file_path=HW.cfg_path)
+        window = AcquisitionGUI(hal)
         window.show()
         sys.exit(app.exec())
     except Exception as e:
