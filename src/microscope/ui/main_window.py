@@ -1,5 +1,7 @@
 # src/microscope/ui/main_window.py
 
+import time  # <--- Added import
+
 import numpy as np
 from magicgui import magicgui
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
@@ -98,7 +100,6 @@ class AcquisitionGUI(QMainWindow):
 
         finished = Signal()
         status = Signal(str)
-        # --- NEW SIGNAL to emit images for display ---
         image_ready = Signal(np.ndarray)
 
         def __init__(self, hal: HardwareAbstractionLayer, settings: AcquisitionSettings):
@@ -109,9 +110,10 @@ class AcquisitionGUI(QMainWindow):
         @Slot()
         def run(self):
             try:
-                # --- MODIFIED: Iterate over the generator from the HAL ---
                 for image in self.hal.run_validated_test(self.settings):
                     self.image_ready.emit(image)
+                    # --- FIX: Add a small sleep to allow the GUI to process the image ---
+                    time.sleep(0.01)
                 self.status.emit("Validated test finished successfully.")
             except Exception as e:
                 self.status.emit(f"Error in validated test: {e}")
@@ -185,6 +187,7 @@ class AcquisitionGUI(QMainWindow):
             return
 
         self._set_controls_for_acquisition(True)
+        self.statusBar().showMessage("Running validated test sequence...")
 
         thread = QThread()
         worker = self.ValidatedTestWorker(self.hal, self.settings)
@@ -194,12 +197,9 @@ class AcquisitionGUI(QMainWindow):
 
         worker.moveToThread(thread)
 
-        # Connect signals
         worker.status.connect(self.statusBar().showMessage)
-        # --- NEW CONNECTION: Display the image from the worker ---
         worker.image_ready.connect(self.display_image)
 
-        # Proper thread cleanup
         worker.finished.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
