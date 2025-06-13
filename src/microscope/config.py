@@ -6,8 +6,7 @@ from dataclasses import dataclass
 USE_DEMO_CONFIG = os.environ.get("MICROSCOPE_DEMO") in ("1", "true", "True")
 
 
-# --- Global Constants and Configuration ---
-# ... (AcquisitionSettings dataclass is unchanged) ...
+# --- Acquisition Settings ---
 @dataclass
 class AcquisitionSettings:
     """Stores all user-configurable acquisition parameters."""
@@ -20,50 +19,53 @@ class AcquisitionSettings:
 
     @property
     def camera_exposure_ms(self) -> float:
-        """Derived camera exposure time."""
+        """Derived camera exposure time from the laser duration."""
         return self.laser_trig_duration_ms + 1.95
 
     @property
     def delay_before_laser_ms(self) -> float:
-        """Derived laser delay time."""
+        """Derived laser delay time from the camera delay."""
         return self.delay_before_camera_ms + 1.25
 
 
+# --- Hardware Constants ---
 @dataclass
 class HardwareConstants:
-    """Stores fixed hardware configuration and constants."""
+    """Stores fixed hardware configuration and device labels."""
 
-    # UPDATED: In demo mode, this path will be ignored in favor of the
-    # programmatic configuration.
     cfg_path: str = "" if USE_DEMO_CONFIG else "hardware_profiles/20250523-OPM.cfg"
 
-    # ... (the rest of the file is unchanged) ...
-    # Device labels (these remain the same as they are mapped in both configs)
+    # --- Device Labels ---
     galvo_a_label: str = "Scanner:AB:33"
     piezo_a_label: str = "PiezoStage:P:34"
     camera_a_label: str = "Camera-1"
     plogic_label: str = "PLogic:E:36"
     tiger_comm_hub_label: str = "TigerCommHub"
 
-    # PLogic addresses and presets
-    plogic_camera_trigger_ttl_addr: int = 44
-    plogic_laser_trigger_ttl_addr: int = 45
-    plogic_galvo_trigger_ttl_addr: int = 43
-    plogic_4khz_clock_addr: int = 192
-    plogic_laser_on_cell: int = 10
-    plogic_laser_preset_num: int = 5
-    plogic_delay_before_laser_cell: int = 11
-    plogic_delay_before_camera_cell: int = 12
-    pulses_per_ms: float = 4.0
+    # --- PLogic Address Definitions ---
+    # These map the physical TTL lines on the Tiger backplane.
+    # Outputs from PLogic card:
+    PLOGIC_OUTPUT_CAMERA: int = 41  # Backplane TTL 0 -> Camera Trigger
+    PLOGIC_OUTPUT_LASER: int = 42  # Backplane TTL 1 -> Laser Trigger
 
-    # Calibration
+    # Inputs to PLogic card:
+    PLOGIC_INPUT_GALVO: int = 43  # Backplane TTL 2 <- Galvo "slice start" signal
+    PLOGIC_INPUT_CLOCK: int = 192  # Internal 4kHz clock signal
+
+    # --- PLogic Cell Assignments ---
+    # These are arbitrary assignments for the internal logic cells.
+    PLOGIC_CELL_CAMERA_DELAY: int = 12
+    PLOGIC_CELL_LASER_DELAY: int = 11
+    PLOGIC_CELL_LASER_PULSE: int = 10
+
+    # --- Hardware Timing & Calibration ---
+    pulses_per_ms: float = 4.0  # From the PLogic card's 4kHz clock
     slice_calibration_slope_um_per_deg: float = 100.0
     slice_calibration_offset_um: float = 0.0
 
-    # Timing Parameters
+    # --- SPIM Scan Parameters ---
     delay_before_scan_ms: float = 0.0
     line_scans_per_slice: int = 1
-    line_scan_duration_ms: float = 1.0
     num_sides: int = 1
     first_side_is_a: bool = True
     scan_opposite_directions: bool = False
@@ -73,7 +75,7 @@ class HardwareConstants:
     camera_mode_is_overlap: bool = False
 
 
-# Instantiate constants
+# Instantiate the constants for global use
 HW = HardwareConstants()
 if USE_DEMO_CONFIG:
     print("...RUNNING IN DEMO MODE...")
