@@ -63,7 +63,6 @@ class AcquisitionGUI(QMainWindow):
         self.acquisition_thread = None
         self._snap_thread = None
         self._snap_worker = None
-        # --- References for the validated test worker and thread ---
         self._validated_test_thread = None
         self._validated_test_worker = None
 
@@ -99,6 +98,8 @@ class AcquisitionGUI(QMainWindow):
 
         finished = Signal()
         status = Signal(str)
+        # --- NEW SIGNAL to emit images for display ---
+        image_ready = Signal(np.ndarray)
 
         def __init__(self, hal: HardwareAbstractionLayer, settings: AcquisitionSettings):
             super().__init__()
@@ -108,7 +109,9 @@ class AcquisitionGUI(QMainWindow):
         @Slot()
         def run(self):
             try:
-                self.hal.run_validated_test(self.settings)
+                # --- MODIFIED: Iterate over the generator from the HAL ---
+                for image in self.hal.run_validated_test(self.settings):
+                    self.image_ready.emit(image)
                 self.status.emit("Validated test finished successfully.")
             except Exception as e:
                 self.status.emit(f"Error in validated test: {e}")
@@ -191,19 +194,18 @@ class AcquisitionGUI(QMainWindow):
 
         worker.moveToThread(thread)
 
-        # --- FIX: Corrected signal connection order for graceful shutdown ---
-        # 1. Worker's finished signal tells the thread to quit.
+        # Connect signals
+        worker.status.connect(self.statusBar().showMessage)
+        # --- NEW CONNECTION: Display the image from the worker ---
+        worker.image_ready.connect(self.display_image)
+
+        # Proper thread cleanup
         worker.finished.connect(thread.quit)
-        # 2. Thread's finished signal (after it has quit) schedules objects for deletion.
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        # 3. Thread's finished signal also calls our GUI cleanup method.
         thread.finished.connect(self._on_validated_test_finished)
 
-        # Connect other signals
-        worker.status.connect(self.statusBar().showMessage)
         thread.started.connect(worker.run)
-
         thread.start()
 
     @Slot()
@@ -228,7 +230,6 @@ class AcquisitionGUI(QMainWindow):
         self._snap_worker = worker
         worker.moveToThread(thread)
 
-        # --- FIX: Corrected signal connection order for graceful shutdown ---
         worker.image_snapped.connect(self._display_snapped_image)
         worker.finished.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)

@@ -61,23 +61,20 @@ class HardwareAbstractionLayer:
     def run_validated_test(self, settings: AcquisitionSettings):
         """
         Runs a self-contained test acquisition using the exact sequence
-        derived from the validated Micro-Manager log file. This bypasses
-        the main controller classes for debugging purposes.
+        derived from the validated Micro-Manager log file. This method
+        is a generator that yields images as they are acquired.
         """
         print("\n--- Starting Validated Test Sequence ---")
         initial_camera = mmc.getCameraDevice()
         initial_auto_shutter = mmc.getAutoShutter()
         initial_exposure = mmc.getExposure()
-        initial_trigger_mode = "Internal Trigger"  # Default value
+        initial_trigger_mode = "Internal Trigger"
 
         try:
             # 1. Setup
             print(f"Validated Test: Setting active camera to {self.camera.label}")
             mmc.setCameraDevice(self.camera.label)
-
-            # Now that Camera-1 is active, get its initial trigger mode
             initial_trigger_mode = self.camera.mmc.getProperty(self.camera.label, "TriggerMode")
-
             mmc.setAutoShutter(False)
             mmc.setConfig("Lasers", "488nm")
             self.camera.set_trigger_mode("Edge Trigger")
@@ -87,11 +84,19 @@ class HardwareAbstractionLayer:
             mmc.waitForSystem()
             print("Validated Test: Devices configured.")
 
-            # 2. Execution
+            # 2. Execution and Image Popping
             mmc.startSequenceAcquisition(self.camera.label, settings.num_slices, 0, True)
             self.galvo.start()
-            while mmc.isSequenceRunning(self.camera.label):
-                time.sleep(0.05)
+
+            images_acquired = 0
+            while images_acquired < settings.num_slices:
+                if mmc.getRemainingImageCount() > 0:
+                    tagged_img = mmc.popNextTaggedImage()
+                    images_acquired += 1
+                    yield tagged_img.pix.reshape(mmc.getImageHeight(), mmc.getImageWidth())
+                else:
+                    time.sleep(0.001)  # Small sleep to prevent busy-waiting
+
             print("Validated Test: Sequence complete.")
 
         finally:
@@ -106,15 +111,9 @@ class HardwareAbstractionLayer:
             self.camera.set_trigger_mode(initial_trigger_mode)
             mmc.setExposure(initial_exposure)
             mmc.setAutoShutter(initial_auto_shutter)
-
-            # --- FIX: Reordered cleanup sequence ---
-            # 1. Wait for the system to be idle WHILE Camera-1 is still active.
             mmc.waitForSystem()
-
-            # 2. THEN restore the original camera device as the very last step.
             print(f"Validated Test: Restoring active camera to {initial_camera}")
             mmc.setCameraDevice(initial_camera)
-
             print("--- Validated Test Finished ---")
 
     # --- Private Implementation ---
