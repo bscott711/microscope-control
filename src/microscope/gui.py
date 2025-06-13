@@ -244,9 +244,7 @@ class AcquisitionGUI(QMainWindow):
 
         min_interval_s = self._calculate_minimal_interval()
         self.min_interval_label.setText(f"{min_interval_s:.2f} s")
-        self.total_time_label.setText(
-            self._calculate_total_time(min_interval_s, params["num_time_points"])
-        )
+        self.total_time_label.setText(self._calculate_total_time(min_interval_s, params["num_time_points"]))
 
     def _calculate_minimal_interval(self) -> float:
         exposure_ms = self.settings.camera_exposure_ms * self.settings.num_slices
@@ -255,11 +253,7 @@ class AcquisitionGUI(QMainWindow):
     def _calculate_total_time(self, min_interval_s: float, num_time_points: int) -> str:
         """Calculates and formats the estimated total acquisition time."""
         params = acquisition_widget.asdict()
-        interval = (
-            min_interval_s
-            if params["minimal_interval"]
-            else max(params["time_interval_s"], min_interval_s)
-        )
+        interval = min_interval_s if params["minimal_interval"] else max(params["time_interval_s"], min_interval_s)
         total_seconds = interval * num_time_points
         h, rem = divmod(total_seconds, 3600)
         m, s = divmod(rem, 60)
@@ -367,9 +361,7 @@ class AcquisitionGUI(QMainWindow):
                     if self.gui.cancel_requested:
                         break
 
-                    self.signals.status.emit(
-                        f"Acquiring Time Point {t_point + 1}/{params['num_time_points']}"
-                    )
+                    self.signals.status.emit(f"Acquiring Time Point {t_point + 1}/{params['num_time_points']}")
                     volume_start_time = time.monotonic()
 
                     self.hw_interface.setup_for_acquisition(self.gui.settings)
@@ -409,20 +401,18 @@ class AcquisitionGUI(QMainWindow):
                 if mmc.getRemainingImageCount() > 0:
                     tagged_img = mmc.popNextTaggedImage()
                     popped += 1
-                    event = MDAEvent(index={"t": t_point, "z": popped - 1}) # type: ignore
+                    event = MDAEvent(index={"t": t_point, "z": popped - 1})  # type: ignore
                     self.signals.frame_ready.emit(tagged_img.pix, event)
                     if writer:
                         writer.frameReady(tagged_img.pix, event, tagged_img.tags)
-                    self.signals.status.emit(
-                        f"Time Point {t_point + 1} | Slice {popped}/{num_slices}"
-                    )
+                    self.signals.status.emit(f"Time Point {t_point + 1} | Slice {popped}/{num_slices}")
                 else:
                     time.sleep(0.005)
 
         def _create_mda_sequence(self, num_slices: int) -> MDASequence:
             step = self.gui.settings.step_size_um
             z_range = (num_slices - 1) * step if num_slices > 1 else 0.0
-            return MDASequence(z_plan={"range": z_range, "step": step}) # type: ignore
+            return MDASequence(z_plan={"range": z_range, "step": step})  # type: ignore
 
         def _setup_writer(self, t_point: int, params: dict):
             if not params["should_save"]:
@@ -438,17 +428,11 @@ class AcquisitionGUI(QMainWindow):
 
         def _wait_for_interval(self, params: dict, start_time: float):
             user_interval = params["time_interval_s"]
-            wait_time = (
-                0
-                if params["minimal_interval"]
-                else max(0, user_interval - (time.monotonic() - start_time))
-            )
+            wait_time = 0 if params["minimal_interval"] else max(0, user_interval - (time.monotonic() - start_time))
             wait_start = time.monotonic()
             while time.monotonic() - wait_start < wait_time:
                 if self.gui.cancel_requested:
                     break
                 remaining = wait_time - (time.monotonic() - wait_start)
-                self.signals.status.emit(
-                    f"Waiting {remaining:.1f}s for next time point..."
-                )
+                self.signals.status.emit(f"Waiting {remaining:.1f}s for next time point...")
                 time.sleep(0.1)
