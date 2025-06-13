@@ -36,6 +36,7 @@ src/
         └── styles/               # UI Styling
             └── __init__.py
             └── style.qss         # A dedicated Qt Stylesheet
+
 Phase 2: Deconstruct the GUI (The View)
 The current monolithic AcquisitionGUI class will be broken down into smaller, single-purpose widgets. This makes the UI modular and easier to manage.
 
