@@ -1,4 +1,4 @@
-# microscope/config.py
+# src/microscope/config.py
 import os
 from dataclasses import dataclass
 
@@ -6,17 +6,29 @@ from dataclasses import dataclass
 USE_DEMO_CONFIG = os.environ.get("MICROSCOPE_DEMO") in ("1", "true", "True")
 
 
-# --- Global Constants and Configuration ---
-# ... (AcquisitionSettings dataclass is unchanged) ...
 @dataclass
 class AcquisitionSettings:
-    """Stores all user-configurable acquisition parameters."""
+    """
+    Stores all user-configurable acquisition parameters.
+    This dataclass now includes all settings from the GUI to ensure type consistency.
+    """
 
+    # Hardware-related settings
     num_slices: int = 3
     step_size_um: float = 1.0
     piezo_center_um: float = -31.0
     laser_trig_duration_ms: float = 10.0
     delay_before_camera_ms: float = 18.0
+
+    # Sequence and timing settings from the GUI
+    time_points: int = 1
+    time_interval_s: float = 0.0
+    is_minimal_interval: bool = True
+
+    # Data saving settings from the GUI
+    should_save: bool = False
+    save_dir: str = ""
+    save_prefix: str = "acquisition"
 
     @property
     def camera_exposure_ms(self) -> float:
@@ -33,12 +45,9 @@ class AcquisitionSettings:
 class HardwareConstants:
     """Stores fixed hardware configuration and constants."""
 
-    # UPDATED: In demo mode, this path will be ignored in favor of the
-    # programmatic configuration.
     cfg_path: str = "" if USE_DEMO_CONFIG else "hardware_profiles/20250523-OPM.cfg"
 
-    # ... (the rest of the file is unchanged) ...
-    # Device labels (these remain the same as they are mapped in both configs)
+    # Device labels
     galvo_a_label: str = "Scanner:AB:33"
     piezo_a_label: str = "PiezoStage:P:34"
     camera_a_label: str = "Camera-1"

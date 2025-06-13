@@ -1,4 +1,4 @@
-# microscope/hardware_control.py
+# src/microscope/hardware/hardware_control.py
 import os
 import time
 import traceback
@@ -6,7 +6,8 @@ from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
 
-from .config import HW, USE_DEMO_CONFIG, AcquisitionSettings
+# Corrected import for the new structure
+from ..config import HW, USE_DEMO_CONFIG, AcquisitionSettings
 
 mmc = CMMCorePlus.instance()
 
@@ -151,7 +152,6 @@ def _load_demo_config():
     mmc.loadDevice(HW.plogic_label, "DemoCamera", "DShutter")
     mmc.initializeAllDevices()
 
-    # CORRECTED: You must tell the core which device to use as the focus drive.
     mmc.setFocusDevice(HW.piezo_a_label)
 
     mmc.definePixelSizeConfig("px")

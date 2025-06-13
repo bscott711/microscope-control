@@ -1,4 +1,4 @@
-# src/microscope/engine.py
+# src/microscope/core/engine.py
 """
 Acquisition Engine Module
 
@@ -14,8 +14,16 @@ import numpy as np
 import tifffile
 from PySide6.QtCore import QObject, Signal
 
-from .hardware import HardwareController
-from .settings import AcquisitionSettings
+from ..config import AcquisitionSettings
+from ..hardware.hardware_control import (
+    HardwareInterface,
+    _reset_for_next_volume,
+    calculate_galvo_parameters,
+    configure_devices_for_slice_scan,
+    final_cleanup,
+    mmc,
+    trigger_slice_scan_acquisition,
+)
 
 
 class AcquisitionEngine(QObject):
@@ -25,31 +33,18 @@ class AcquisitionEngine(QObject):
     It runs in a separate worker thread and communicates with the GUI via signals.
     """
 
-    # --- Signals for GUI Communication ---
-    # Emitted when a new image is acquired and ready for display
     new_image_ready = Signal(np.ndarray)
-    # Emitted to update the status bar in the GUI
     status_updated = Signal(str)
-    # Emitted when the entire acquisition sequence (all time points) is finished
     acquisition_finished = Signal()
 
     def __init__(
         self,
-        hw_controller: HardwareController,
+        hw_interface: HardwareInterface,
         acq_settings: AcquisitionSettings,
     ):
-        """
-        Initializes the AcquisitionEngine.
-
-        Args:
-            hw_controller: An instance of the HardwareController.
-            acq_settings: A dataclass with all the acquisition parameters.
-        """
         super().__init__()
-        self.hw = hw_controller
+        self.hw = hw_interface
         self.settings = acq_settings
-
-        # --- State Flags ---
         self._is_running = False
         self._cancel_requested = False
         self.pixel_size_um = 1.0
@@ -62,7 +57,7 @@ class AcquisitionEngine(QObject):
         print("Acquisition engine started.")
 
         try:
-            self.pixel_size_um = self.hw.get_pixel_size_um()
+            self.pixel_size_um = mmc.getPixelSizeUm() or 1.0
 
             for t in range(self.settings.time_points):
                 if self._cancel_requested:
@@ -74,21 +69,22 @@ class AcquisitionEngine(QObject):
                 volume_start_time = time.monotonic()
                 self.current_volume_images.clear()
 
-                self.hw.setup_for_acquisition(self.settings)
-                self._acquire_volume()
+                (galvo_amp, galvo_center, num_slices) = calculate_galvo_parameters(self.settings)
+                configure_devices_for_slice_scan(self.settings, galvo_amp, galvo_center, num_slices)
+
+                self._acquire_volume(num_slices)
 
                 if self._cancel_requested:
                     self.status_updated.emit("Acquisition cancelled.")
                     break
 
-                # Save data if requested
                 self._save_current_volume(current_time_point)
 
-                # Calculate delay for the next time point
-                volume_duration = time.monotonic() - volume_start_time
                 if current_time_point < self.settings.time_points:
+                    volume_duration = time.monotonic() - volume_start_time
                     delay = self._calculate_inter_volume_delay(volume_duration)
                     self.status_updated.emit(f"Waiting {delay:.1f}s for next time point...")
+                    _reset_for_next_volume()
                     time.sleep(delay)
 
         except Exception as e:
@@ -99,30 +95,30 @@ class AcquisitionEngine(QObject):
             traceback.print_exc()
         finally:
             print("Engine finishing up...")
-            self.hw.final_cleanup()
+            final_cleanup(self.settings)
             self.acquisition_finished.emit()
             self._is_running = False
 
-    def _acquire_volume(self):
+    def _acquire_volume(self, num_slices: int):
         """Acquires a single Z-stack."""
-        self.hw.mmc.startSequenceAcquisition(self.settings.num_slices, 0, True)
-        self.hw.trigger_acquisition()
+        mmc.startSequenceAcquisition(num_slices, 0, True)
+        trigger_slice_scan_acquisition()
 
         images_acquired = 0
-        while images_acquired < self.settings.num_slices:
+        while images_acquired < num_slices:
             if self._cancel_requested:
                 break
-            if self.hw.mmc.getRemainingImageCount() > 0:
-                tagged_img = self.hw.mmc.popNextTaggedImage()
+            if mmc.getRemainingImageCount() > 0:
+                tagged_img = mmc.popNextTaggedImage()
                 images_acquired += 1
-                img = tagged_img.pix.reshape(self.hw.mmc.getImageHeight(), self.hw.mmc.getImageWidth())
+                img = tagged_img.pix.reshape(mmc.getImageHeight(), mmc.getImageWidth())
                 self.new_image_ready.emit(img)
                 if self.settings.should_save:
                     self.current_volume_images.append(img)
             else:
-                time.sleep(0.001)  # Small sleep to prevent busy-waiting
+                time.sleep(0.001)
 
-        self.hw.mmc.stopSequenceAcquisition()
+        mmc.stopSequenceAcquisition()
 
     def _save_current_volume(self, time_point: int):
         """Saves the collected images for the most recent volume."""

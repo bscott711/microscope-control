@@ -1,19 +1,17 @@
-# microscope/__main__.py
+# src/microscope/__main__.py
 import sys
 import traceback
 
 from PySide6.QtWidgets import QApplication
 
+# Corrected imports for the new structure
 from .config import HW
-from .gui import AcquisitionGUI
-from .hardware_control import HardwareInterface, mmc
+from .hardware.hardware_control import HardwareInterface, mmc
+from .ui.main_window import AcquisitionGUI
 
 
 def main():
     """Main function to run the application."""
-    # CORRECTED: Use the singleton pattern to get the existing QApplication
-    # instance or create a new one if it doesn't exist. This prevents a
-    # RuntimeError when a library like magicgui creates an instance for us.
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)

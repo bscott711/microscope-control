@@ -1,4 +1,4 @@
-# microscope/gui.py
+# src/microscope/ui/main_window.py
 import os
 import threading
 import time
@@ -23,8 +23,9 @@ from PySide6.QtWidgets import (
 )
 from useq import MDAEvent, MDASequence
 
-from .config import AcquisitionSettings
-from .hardware_control import (
+# Corrected imports for the new structure
+from ..config import AcquisitionSettings
+from ..hardware.hardware_control import (
     HardwareInterface,
     _reset_for_next_volume,
     calculate_galvo_parameters,
@@ -161,7 +162,12 @@ class AcquisitionGUI(QMainWindow):
             except Exception as e:
                 print(f"Error during snap: {e}")
 
-        self.worker = self.AcquisitionWorker(self)
+        # This part of the code has some issues with threading and signals
+        # that will be addressed in a future refactoring phase.
+        class SnapWorker(QObject):
+            signals = WorkerSignals()
+
+        self.worker = SnapWorker()
         self.worker.signals.frame_ready.connect(self.display_image)
 
         snap_thread = threading.Thread(target=_snap_thread)
@@ -339,22 +345,14 @@ class AcquisitionGUI(QMainWindow):
                         if mmc.getRemainingImageCount() > 0:
                             tagged_img = mmc.popNextTaggedImage()
                             popped_images += 1
-
-                            # CORRECTED: Create the event without metadata, as it's frozen.
-                            event = MDAEvent(
-                                index={"t": t_point, "z": popped_images - 1}  # type: ignore
-                            )
-
+                            event = MDAEvent(index={"t": t_point, "z": popped_images - 1})  # type: ignore
                             self.signals.frame_ready.emit(tagged_img.pix, event)
-
                             if writer:
-                                # Pass metadata as the separate, third argument.
                                 writer.frameReady(
                                     tagged_img.pix,
                                     event,
                                     tagged_img.tags,  # type: ignore
                                 )
-
                             self.signals.status.emit(f"Time Point {t_point + 1} | Slice {popped_images}/{num_slices}")
                         else:
                             time.sleep(0.005)
@@ -381,28 +379,23 @@ class AcquisitionGUI(QMainWindow):
         def _setup_writer(self, t_point: int, params: dict):
             if not params["should_save"]:
                 return None
-
             save_dir = params["save_dir"]
             prefix = params["save_prefix"]
             if not save_dir or not prefix:
                 self.signals.status.emit("Error: Save directory or prefix missing.")
                 return None
-
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"{prefix}_T{t_point:04d}_{timestamp}.tif"
             filepath = os.path.join(save_dir, filename)
-
             return OMETiffWriter(filepath)
 
         def _wait_for_interval(self, params: dict, start_time: float):
             user_interval = params["time_interval_s"]
             wait_time = 0 if params["minimal_interval"] else max(0, user_interval - (time.monotonic() - start_time))
-
             wait_start = time.monotonic()
             while time.monotonic() - wait_start < wait_time:
                 if self.gui.cancel_requested:
                     break
-
                 remaining = wait_time - (time.monotonic() - wait_start)
                 self.signals.status.emit(f"Waiting {remaining:.1f}s for next time point...")
                 time.sleep(0.1)
