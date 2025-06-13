@@ -186,20 +186,23 @@ class AcquisitionGUI(QMainWindow):
         thread = QThread()
         worker = self.ValidatedTestWorker(self.hal, self.settings)
 
-        # --- FIX: Store persistent references to thread and worker ---
         self._validated_test_thread = thread
         self._validated_test_worker = worker
 
         worker.moveToThread(thread)
 
-        # --- Connect signals ---
-        worker.status.connect(self.statusBar().showMessage)
-        worker.finished.connect(self._on_validated_test_finished)
-
-        thread.started.connect(worker.run)
-        thread.finished.connect(thread.quit)
+        # --- FIX: Corrected signal connection order for graceful shutdown ---
+        # 1. Worker's finished signal tells the thread to quit.
+        worker.finished.connect(thread.quit)
+        # 2. Thread's finished signal (after it has quit) schedules objects for deletion.
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        # 3. Thread's finished signal also calls our GUI cleanup method.
+        thread.finished.connect(self._on_validated_test_finished)
+
+        # Connect other signals
+        worker.status.connect(self.statusBar().showMessage)
+        thread.started.connect(worker.run)
 
         thread.start()
 
@@ -218,13 +221,20 @@ class AcquisitionGUI(QMainWindow):
 
         self.snap_button.setEnabled(False)
         mmc.setExposure(self.settings.camera_exposure_ms)
+
         thread = QThread()
         worker = self.SnapWorker()
         self._snap_thread = thread
         self._snap_worker = worker
         worker.moveToThread(thread)
+
+        # --- FIX: Corrected signal connection order for graceful shutdown ---
         worker.image_snapped.connect(self._display_snapped_image)
-        worker.finished.connect(self._on_snap_finished)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_snap_finished)
+
         thread.started.connect(worker.run)
         thread.start()
 
@@ -234,9 +244,6 @@ class AcquisitionGUI(QMainWindow):
         self.snap_button.setEnabled(True)
         self._snap_thread = None
         self._snap_worker = None
-        if self._snap_thread:
-            self._snap_thread.quit()
-            self._snap_thread.wait()
 
     @Slot(np.ndarray)
     def _display_snapped_image(self, image: np.ndarray):
@@ -367,7 +374,7 @@ class AcquisitionGUI(QMainWindow):
         h, w = image.shape
         img_range = (image.max() - image.min()) or 1
         norm = ((image - image.min()) / img_range * 255).astype(np.uint8)
-        q_image = QImage(norm.data, w, h, w, QImage.Format_Grayscale8)
+        q_image = QImage(norm.data, w, h, w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(q_image).scaled(
             self.image_display.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
