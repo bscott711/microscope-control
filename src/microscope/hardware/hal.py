@@ -29,28 +29,20 @@ class HardwareAbstractionLayer:
         self._initialize_mmc()
 
         # Compose the HAL from specialized controller components
-        # FIX: Correctly pass the required dependencies to each controller
         self.camera = CameraController(mmc, self._set_property)
         self.stage = StageController(mmc, self._set_property)
-        self.galvo = GalvoController(self._set_property, self._execute_tiger_serial_command)
+        self.galvo = GalvoController(self._set_property)
         self.plogic = PLogicController(self._execute_tiger_serial_command)
 
     # --- Public API ---
     def setup_for_acquisition(self, settings: AcquisitionSettings):
         """Prepares all hardware for a triggered acquisition sequence."""
-        print("\n--- Configuring devices for acquisition ---")
-        (
-            galvo_amp,
-            galvo_center,
-            num_slices,
-        ) = self._calculate_galvo_parameters(settings)
-
+        print("\n--- Configuring devices for acquisition (standard path) ---")
         self.camera.set_trigger_mode("Edge Trigger")
-        self.galvo.configure_for_scan(settings, galvo_amp, galvo_center, num_slices)
-        self.stage.configure_for_scan(settings, num_slices)
+        self.galvo.configure_for_scan(settings)
+        self.stage.configure_for_scan(settings)
         self.plogic.program_for_acquisition(settings)
-        self.galvo.arm()
-        self.stage.set_idle()  # Set piezo to idle after configuration
+        self.stage.set_idle()
         print("--- Device configuration finished. ---")
 
     def start_acquisition(self):
@@ -59,11 +51,55 @@ class HardwareAbstractionLayer:
 
     def final_cleanup(self, settings: AcquisitionSettings):
         """Resets hardware to a safe, idle state after acquisition."""
-        print("\n--- Performing final cleanup ---")
+        print("\n--- Performing final cleanup (standard path) ---")
         self.galvo.set_idle()
         self.stage.set_idle()
+        self.plogic.cleanup()
         self.stage.reset_position(settings)
         self.camera.set_trigger_mode("Internal Trigger")
+
+    def run_validated_test(self, settings: AcquisitionSettings):
+        """
+        Runs a self-contained test acquisition using the exact sequence
+        derived from the validated Micro-Manager log file. This bypasses
+        the main controller classes for debugging purposes.
+        """
+        print("\n--- Starting Validated Test Sequence ---")
+        initial_auto_shutter = mmc.getAutoShutter()
+        initial_exposure = mmc.getExposure()
+        initial_trigger_mode = self.camera.mmc.getProperty(self.camera.label, "TriggerMode")
+
+        try:
+            # 1. Setup
+            mmc.setAutoShutter(False)
+            mmc.setConfig("Lasers", "488nm")
+            self.camera.set_trigger_mode("Edge Trigger")
+            mmc.setExposure(settings.camera_exposure_ms)
+            self.galvo.configure_for_scan(settings)  # Uses corrected galvo logic
+            self.plogic.program_for_acquisition(settings)  # Uses corrected plogic logic
+            mmc.waitForSystem()
+            print("Validated Test: Devices configured.")
+
+            # 2. Execution
+            mmc.startSequenceAcquisition(self.camera.label, settings.num_slices, 0, True)
+            self.galvo.start()  # Sends the master trigger
+            while mmc.isSequenceRunning(self.camera.label):
+                time.sleep(0.05)
+            print("Validated Test: Sequence complete.")
+
+        finally:
+            # 3. Cleanup
+            print("Validated Test: Cleaning up...")
+            if mmc.isSequenceRunning(self.camera.label):
+                mmc.stopSequenceAcquisition(self.camera.label)
+            self.galvo.set_idle()
+            self.stage.set_idle()
+            self.plogic.cleanup()
+            self.camera.set_trigger_mode(initial_trigger_mode)
+            mmc.setExposure(initial_exposure)
+            mmc.setAutoShutter(initial_auto_shutter)
+            mmc.waitForSystem()
+            print("--- Validated Test Finished ---")
 
     # --- Private Implementation ---
     def _initialize_mmc(self):
@@ -89,23 +125,6 @@ class HardwareAbstractionLayer:
             print(f"CRITICAL Error loading configuration '{self.config_path}': {e}")
             traceback.print_exc()
             raise
-
-    def _calculate_galvo_parameters(self, settings: AcquisitionSettings):
-        """Calculates galvo scan parameters from acquisition settings."""
-        if abs(HW.slice_calibration_slope_um_per_deg) < 1e-9:
-            raise ValueError("Slice calibration slope cannot be zero.")
-        num_slices = settings.num_slices
-        piezo_amplitude = (num_slices - 1) * settings.step_size_um
-        if HW.camera_mode_is_overlap:
-            if num_slices > 1:
-                piezo_amplitude *= float(num_slices) / (num_slices - 1.0)
-            num_slices += 1
-
-        galvo_amplitude = piezo_amplitude / HW.slice_calibration_slope_um_per_deg
-        galvo_center = (
-            settings.piezo_center_um - HW.slice_calibration_offset_um
-        ) / HW.slice_calibration_slope_um_per_deg
-        return round(galvo_amplitude, 4), round(galvo_center, 4), num_slices
 
     def _execute_tiger_serial_command(self, command_string: str):
         """Executes a serial command on the TigerCommHub."""

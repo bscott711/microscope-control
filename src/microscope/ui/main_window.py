@@ -14,20 +14,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from useq import MDAEvent
 
 from ..config import AcquisitionSettings
 from ..core.engine import AcquisitionEngine
 from ..hardware.hal import HardwareAbstractionLayer, mmc
-
-
-class WorkerSignals(QObject):
-    """Defines signals available from a running worker thread."""
-
-    finished = Signal()
-    error = Signal(tuple)
-    status = Signal(str)
-    frame_ready = Signal(np.ndarray, MDAEvent)
 
 
 @magicgui(
@@ -47,7 +37,7 @@ def acquisition_widget(
     num_time_points: int = 1,
     time_interval_s: float = 10.0,
     minimal_interval: bool = False,
-    num_slices: int = 3,
+    num_slices: int = 10,
     laser_trig_duration_ms: float = 10.0,
     step_size_um: float = 1.0,
     should_save: bool = False,
@@ -72,7 +62,10 @@ class AcquisitionGUI(QMainWindow):
         self.engine = None
         self.acquisition_thread = None
         self._snap_thread = None
-        self._snap_worker = None  # Add worker reference
+        self._snap_worker = None
+        # --- References for the validated test worker and thread ---
+        self._validated_test_thread = None
+        self._validated_test_worker = None
 
         self._create_main_widgets()
         self._layout_widgets()
@@ -92,13 +85,33 @@ class AcquisitionGUI(QMainWindow):
 
         @Slot()
         def run(self):
-            """Snap an image and emit it."""
             try:
                 mmc.snapImage()
                 image = mmc.getImage()
                 self.image_snapped.emit(image)
             except Exception as e:
                 print(f"Error during snap worker: {e}")
+            finally:
+                self.finished.emit()
+
+    class ValidatedTestWorker(QObject):
+        """Worker to run the validated HAL test sequence."""
+
+        finished = Signal()
+        status = Signal(str)
+
+        def __init__(self, hal: HardwareAbstractionLayer, settings: AcquisitionSettings):
+            super().__init__()
+            self.hal = hal
+            self.settings = settings
+
+        @Slot()
+        def run(self):
+            try:
+                self.hal.run_validated_test(self.settings)
+                self.status.emit("Validated test finished successfully.")
+            except Exception as e:
+                self.status.emit(f"Error in validated test: {e}")
             finally:
                 self.finished.emit()
 
@@ -114,6 +127,7 @@ class AcquisitionGUI(QMainWindow):
         self.live_button = QPushButton("Live")
         self.live_button.setCheckable(True)
         self.run_button = QPushButton("Run Time Series")
+        self.validated_test_button = QPushButton("Run Validated Test")
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
 
@@ -145,6 +159,7 @@ class AcquisitionGUI(QMainWindow):
         button_layout.addWidget(self.snap_button)
         button_layout.addWidget(self.live_button)
         button_layout.addStretch()
+        button_layout.addWidget(self.validated_test_button)
         button_layout.addWidget(self.run_button)
         button_layout.addWidget(self.cancel_button)
         main_layout.addLayout(button_layout)
@@ -156,36 +171,60 @@ class AcquisitionGUI(QMainWindow):
         self.snap_button.clicked.connect(self._on_snap)
         self.live_button.toggled.connect(self._on_live_toggled)
         self.run_button.clicked.connect(self.start_time_series)
+        self.validated_test_button.clicked.connect(self._on_run_validated_test)
         self.cancel_button.clicked.connect(self._request_cancel)
         acquisition_widget.changed.connect(self._update_all_estimates)
 
     @Slot()
+    def _on_run_validated_test(self):
+        """Runs the validated test sequence in a separate thread."""
+        if self.acquisition_in_progress:
+            return
+
+        self._set_controls_for_acquisition(True)
+
+        thread = QThread()
+        worker = self.ValidatedTestWorker(self.hal, self.settings)
+
+        # --- FIX: Store persistent references to thread and worker ---
+        self._validated_test_thread = thread
+        self._validated_test_worker = worker
+
+        worker.moveToThread(thread)
+
+        # --- Connect signals ---
+        worker.status.connect(self.statusBar().showMessage)
+        worker.finished.connect(self._on_validated_test_finished)
+
+        thread.started.connect(worker.run)
+        thread.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+
+        thread.start()
+
+    @Slot()
+    def _on_validated_test_finished(self):
+        """Cleans up after the validated test thread is finished."""
+        self._set_controls_for_acquisition(False)
+        self._validated_test_thread = None
+        self._validated_test_worker = None
+
+    @Slot()
     def _on_snap(self):
         """Acquires and displays a single image using a worker thread."""
-        # Prevent starting a new snap while one is running
         if self._snap_thread and self._snap_thread.isRunning():
             return
 
         self.snap_button.setEnabled(False)
         mmc.setExposure(self.settings.camera_exposure_ms)
-
-        # Create thread and worker
         thread = QThread()
         worker = self.SnapWorker()
-
-        # Store references to prevent garbage collection
         self._snap_thread = thread
         self._snap_worker = worker
-
         worker.moveToThread(thread)
-
-        # Connect signals
         worker.image_snapped.connect(self._display_snapped_image)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_snap_finished)
-
+        worker.finished.connect(self._on_snap_finished)
         thread.started.connect(worker.run)
         thread.start()
 
@@ -194,12 +233,15 @@ class AcquisitionGUI(QMainWindow):
         """Re-enables the snap button after the thread is finished."""
         self.snap_button.setEnabled(True)
         self._snap_thread = None
-        self._snap_worker = None  # Clear worker reference
+        self._snap_worker = None
+        if self._snap_thread:
+            self._snap_thread.quit()
+            self._snap_thread.wait()
 
     @Slot(np.ndarray)
     def _display_snapped_image(self, image: np.ndarray):
         """Displays an image that was acquired by the SnapWorker."""
-        self.display_image(image, MDAEvent())
+        self.display_image(image)
 
     @Slot(bool)
     def _on_live_toggled(self, checked: bool):
@@ -225,13 +267,14 @@ class AcquisitionGUI(QMainWindow):
 
     def _set_controls_for_live(self, is_live: bool):
         self.run_button.setEnabled(not is_live)
+        self.validated_test_button.setEnabled(not is_live)
         self.snap_button.setEnabled(not is_live)
 
     @Slot()
     def _on_live_timer(self):
         if mmc.getRemainingImageCount() > 0:
             image = mmc.getLastImage()
-            self.display_image(image, MDAEvent())
+            self.display_image(image)
 
     @Slot()
     def _update_all_estimates(self):
@@ -243,7 +286,7 @@ class AcquisitionGUI(QMainWindow):
         self.settings.time_interval_s = params["time_interval_s"]
         self.settings.is_minimal_interval = params["minimal_interval"]
         self.settings.should_save = params["should_save"]
-        self.settings.save_dir = params["save_dir"]
+        self.settings.save_dir = str(params["save_dir"])
         self.settings.save_prefix = params["save_prefix"]
 
         exposure = self.settings.camera_exposure_ms
@@ -286,12 +329,10 @@ class AcquisitionGUI(QMainWindow):
         self.engine = AcquisitionEngine(self.hal, self.settings)
         self.engine.moveToThread(self.acquisition_thread)
 
-        # Connect signals from engine to GUI slots
         self.engine.acquisition_finished.connect(self._finish_time_series)
         self.engine.status_updated.connect(self.statusBar().showMessage)
-        self.engine.new_image_ready.connect(self.display_image_from_engine)
+        self.engine.new_image_ready.connect(self.display_image)
 
-        # Connect thread signals
         self.acquisition_thread.started.connect(self.engine.run_acquisition)
         self.engine.acquisition_finished.connect(self.acquisition_thread.quit)
         self.acquisition_thread.finished.connect(self.engine.deleteLater)
@@ -309,6 +350,7 @@ class AcquisitionGUI(QMainWindow):
         self.acquisition_in_progress = is_running
         self.controls_widget.setEnabled(not is_running)
         self.run_button.setEnabled(not is_running)
+        self.validated_test_button.setEnabled(not is_running)
         self.live_button.setEnabled(not is_running)
         self.snap_button.setEnabled(not is_running)
         self.cancel_button.setEnabled(is_running)
@@ -321,16 +363,11 @@ class AcquisitionGUI(QMainWindow):
         self.hal.final_cleanup(self.settings)
 
     @Slot(np.ndarray)
-    def display_image_from_engine(self, image: np.ndarray):
-        self.display_image(image, MDAEvent())
-
-    @Slot(np.ndarray, MDAEvent)
-    def display_image(self, image: np.ndarray, event: MDAEvent):
+    def display_image(self, image: np.ndarray):
         h, w = image.shape
-        # Ensure normalization handles all-black images
         img_range = (image.max() - image.min()) or 1
         norm = ((image - image.min()) / img_range * 255).astype(np.uint8)
-        q_image = QImage(norm.data, w, h, w, QImage.Format.Format_Grayscale8)
+        q_image = QImage(norm.data, w, h, w, QImage.Format_Grayscale8)
         pixmap = QPixmap.fromImage(q_image).scaled(
             self.image_display.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
