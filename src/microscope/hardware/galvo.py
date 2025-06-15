@@ -1,43 +1,25 @@
-# src/microscope/hardware/galvo.py
-from typing import Callable
+import serial
 
-from ..config import HW, AcquisitionSettings
+from .base import BaseHardwareController
 
 
-class GalvoController:
-    """A controller for the Galvo scanner card."""
+class GalvoHardwareController(BaseHardwareController):
+    """Hardware controller for the Galvo scanner card."""
 
-    def __init__(self, set_property: Callable):
-        """
-        Initializes the GalvoController.
+    def __init__(self):
+        super().__init__()
 
-        Args:
-            set_property: A function to set a device property.
-        """
-        self._set_property = set_property
-        self.label = HW.galvo_a_label
+    def configure_for_z_stack(self, ser: serial.Serial, params: dict):
+        """Configures the galvo card for a hardware-timed Z-stack."""
+        galvo_addr = params["galvo_card_addr"]
+        galvo_axis = params["galvo_axis"]
+        num_slices = params["num_slices"]
 
-    def configure_for_scan(self, settings: AcquisitionSettings):
-        """Configures all galvo properties based on the validated log file."""
-        print("Configuring Galvo scanner with validated sequence...")
-        self._set_property(self.label, "BeamEnabled", "No")
-        self._set_property(self.label, "SPIMNumSlicesPerPiezo", 1)
-        self._set_property(self.label, "SPIMDelayBeforeRepeat(ms)", 0)
-        self._set_property(self.label, "SPIMNumRepeats", 1)
-        self._set_property(self.label, "SPIMDelayBeforeSide(ms)", 1)
-        # The laser trigger duration is the same as the scan duration in this mode.
-        self._set_property(self.label, "SPIMScanDuration(ms)", settings.laser_trig_duration_ms)
-        self._set_property(self.label, "SPIMNumSlices", settings.num_slices)
-        self._set_property(self.label, "SPIMNumSides", 1)
-        self._set_property(self.label, "SPIMFirstSide", "A")
-        self._set_property(self.label, "SPIMPiezoHomeDisable", "No")
-        self._set_property(self.label, "SPIMInterleaveSidesEnable", "No")
+        z_step_degrees = params["z_step_um"] / params["microns_per_degree"]
+        z_step_millidegrees = z_step_degrees * 1000
 
-    def start(self):
-        """Starts the galvo's SPIM state machine (sends the master trigger)."""
-        self._set_property(self.label, "SPIMState", "Running")
-
-    def set_idle(self):
-        """Sets the galvo's SPIM state to Idle and disables the beam."""
-        self._set_property(self.label, "BeamEnabled", "No")
-        self._set_property(self.label, "SPIMState", "Idle")
+        self._send_command(ser, f"{galvo_addr}ZS {galvo_axis}={z_step_millidegrees} Y={num_slices}")
+        self._send_command(ser, f"{galvo_addr}TTL X=4")
+        self._send_command(ser, f"{galvo_addr}TTL Y=2")
+        self._send_command(ser, f"{galvo_addr}RT Y=1")
+        self._send_command(ser, f"{galvo_addr}SS Z")

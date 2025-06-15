@@ -1,139 +1,82 @@
-# src/microscope/core/engine.py
-import os
-import time
 import traceback
-from datetime import datetime
 
-import numpy as np
-import tifffile
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
 
-from ..config import AcquisitionSettings
-
-# Updated import for the new HAL
-from ..hardware.hal import HardwareAbstractionLayer, mmc
+# Import type hints for clarity
+from ..hardware.hal import HardwareAbstractionLayer
+from ..ui.main_window import MainWindow
 
 
-class AcquisitionEngine(QObject):
-    """
-    The core engine for managing acquisition sequences.
-    """
+class AcquisitionWorker(QRunnable):
+    """Worker thread for running an acquisition to keep the GUI responsive."""
 
-    new_image_ready = Signal(np.ndarray)
-    status_updated = Signal(str)
-    acquisition_finished = Signal()
-
-    def __init__(self, hal: HardwareAbstractionLayer, settings: AcquisitionSettings):
+    def __init__(self, hal: HardwareAbstractionLayer, settings: dict):
         super().__init__()
         self.hal = hal
         self.settings = settings
-        self._is_running = False
-        self._cancel_requested = False
-        self.pixel_size_um = 1.0
-        self.current_volume_images = []
 
-    def run_acquisition(self):
-        """The main worker method that executes the entire acquisition sequence."""
-        self._is_running = True
-        self._cancel_requested = False
-        print("Acquisition engine started.")
-
+    @Slot()
+    def run(self):
+        """Execute the acquisition in the background."""
         try:
-            self.pixel_size_um = mmc.getPixelSizeUm() or 1.0
-
-            for t in range(self.settings.time_points):
-                if self._cancel_requested:
-                    self.status_updated.emit("Acquisition cancelled.")
-                    break
-
-                self.status_updated.emit(f"Starting Time Point {t + 1}/{self.settings.time_points}...")
-                volume_start_time = time.monotonic()
-                self.current_volume_images.clear()
-
-                # Simplified calls to the HAL
-                self.hal.setup_for_acquisition(self.settings)
-                self._acquire_volume()
-
-                if self._cancel_requested:
-                    self.status_updated.emit("Acquisition cancelled.")
-                    break
-
-                self._save_current_volume(t + 1)
-
-                if t < self.settings.time_points - 1:
-                    duration = time.monotonic() - volume_start_time
-                    delay = self._calculate_inter_volume_delay(duration)
-                    self.status_updated.emit(f"Waiting {delay:.1f}s for next time point...")
-                    time.sleep(delay)
-
-        except Exception as e:
-            self.status_updated.emit(f"Error: {e}")
+            self.hal.setup_and_run_z_stack(self.settings)
+        except Exception:
             traceback.print_exc()
-        finally:
-            print("Engine finishing up...")
-            self.hal.final_cleanup(self.settings)
-            self.acquisition_finished.emit()
-            self._is_running = False
 
-    def _acquire_volume(self):
-        """Acquires a single Z-stack."""
-        num_slices = self.settings.num_slices  # Use settings directly
-        mmc.startSequenceAcquisition(num_slices, 0, True)
-        self.hal.start_acquisition()
 
-        images_acquired = 0
-        while images_acquired < num_slices:
-            if self._cancel_requested:
-                break
-            if mmc.getRemainingImageCount() > 0:
-                tagged_img = mmc.popNextTaggedImage()
-                images_acquired += 1
-                img = tagged_img.pix.reshape(mmc.getImageHeight(), mmc.getImageWidth())
-                self.new_image_ready.emit(img)
-                if self.settings.should_save:
-                    self.current_volume_images.append(img)
-            else:
-                time.sleep(0.001)
+class AcquisitionEngine(QObject):
+    """The Controller: connects the View to the Model (HAL)."""
 
-        mmc.stopSequenceAcquisition()
+    # Signals to be connected to the View's slots
+    status_updated = Signal(str)
+    acquisition_finished = Signal()
+    acquisition_started = Signal()
 
-    def _save_current_volume(self, time_point: int):
-        if not self.settings.should_save or not self.current_volume_images:
-            return
-        # ... (rest of the save logic is unchanged)
-        save_dir = self.settings.save_dir
-        prefix = self.settings.save_prefix
-        if not save_dir or not prefix:
-            self.status_updated.emit("Error: Save directory or prefix missing.")
-            return
+    def __init__(self, hal: HardwareAbstractionLayer, view: MainWindow):
+        super().__init__()
+        self.hal = hal
+        self.view = view  # Store a reference to the View
+        self.thread_pool = QThreadPool()
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{prefix}_T{time_point:04d}_{timestamp}.tif"
-        full_path = os.path.join(save_dir, filename)
+        # --- Connect signals from the View to slots in this Controller ---
+        self.view.start_acquisition_requested.connect(self.run_acquisition)
+        self.view.cancel_acquisition_requested.connect(self.cancel_acquisition)
 
-        self.status_updated.emit(f"Saving to {filename}...")
-        try:
-            image_stack = np.stack(self.current_volume_images, axis=0)
-            metadata = {
-                "axes": "ZYX",
-                "PhysicalSizeZ": self.settings.step_size_um,
-                "PhysicalSizeY": self.pixel_size_um,
-                "PhysicalSizeX": self.pixel_size_um,
-                "PhysicalSizeZUnit": "micron",
-                "PhysicalSizeYUnit": "micron",
-                "PhysicalSizeXUnit": "micron",
-            }
-            tifffile.imwrite(full_path, image_stack, imagej=True, metadata=metadata)
-            print(f"Save complete: {filename}")
-        except Exception as e:
-            self.status_updated.emit("Error: File save failed.")
-            print(f"Error saving file: {e}")
+        # --- Connect signals from this Controller to slots in the View ---
+        self.status_updated.connect(self.view.update_status)
+        self.acquisition_started.connect(self.view.on_acquisition_started)
+        self.acquisition_finished.connect(self.view.on_acquisition_finished)
 
-    def _calculate_inter_volume_delay(self, volume_duration: float) -> float:
-        if self.settings.is_minimal_interval:
-            return 0.0
-        return max(0, self.settings.time_interval_s - volume_duration)
+        # --- Connect events from the Model (HAL/mmc) to slots in this Controller ---
+        self.hal.mmc.mda.events.sequenceStarted.connect(self._on_mda_started)
+        self.hal.mmc.mda.events.sequenceFinished.connect(self._on_mda_finished)
+        self.hal.mmc.mda.events.frameReady.connect(self._on_frame_ready)
 
-    def cancel(self):
-        if self._is_running:
-            self._cancel_requested = True
+    @Slot(dict)
+    def run_acquisition(self, settings: dict):
+        """Creates and starts a worker to run the acquisition."""
+        worker = AcquisitionWorker(self.hal, settings)
+        self.thread_pool.start(worker)
+
+    @Slot()
+    def cancel_acquisition(self):
+        """Stops a running MDA if one is active."""
+        if self.hal.mmc.mda.is_running():
+            self.status_updated.emit("Cancelling acquisition...")
+            self.hal.mmc.mda.cancel()
+
+    # --- Slots for Model Events ---
+    @Slot(object)
+    def _on_mda_started(self, sequence):
+        self.acquisition_started.emit()
+
+    @Slot(object)
+    def _on_mda_finished(self, sequence):
+        self.hal.final_cleanup()
+        self.acquisition_finished.emit()
+
+    @Slot(object, object)
+    def _on_frame_ready(self, frame, event):
+        current_slice = event.index.get("t", 0) + 1
+        total_slices = event.sequence.t_loop
+        self.status_updated.emit(f"Acquired Slice {current_slice} / {total_slices}")

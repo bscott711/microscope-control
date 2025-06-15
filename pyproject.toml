@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # --- Core Project Metadata ---
 [project]
 name = "microscope-control"
-version = "0.1.0.dev3"
+version = "0.1.0.dev4"
 description = "OPM Control System"
 readme = "README.md"
 license = "MIT"
@@ -26,16 +26,15 @@ classifiers = [
 dependencies = [
     # Core Microscope Control
     "pymmcore-plus[cli,io]",
-
     # GUI Framework
     "pyside6",
     "qtpy",
     "magicgui>=0.10.0",
-
     # Data & Imaging
     "numpy",
     "pillow",
     "tifffile",
+    "pyserial>=3.5",
 ]
 
 [project.optional-dependencies]
@@ -44,7 +43,7 @@ dev = ["ruff"]
 
 # --- Entry Points & URLs ---
 [project.scripts]
-microscope-control = "microscope.__main__:main"
+microscope-control = "microscope.ui.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/bscott711/microscope-control"

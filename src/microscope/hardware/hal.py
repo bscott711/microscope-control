@@ -1,184 +1,125 @@
-# src/microscope/hardware/hal.py
-import os
-import time
-import traceback
-from typing import Any, Optional
+from typing import Optional
 
+import serial
 from pymmcore_plus import CMMCorePlus
+from pymmcore_plus.mda.handlers import OMEZarrWriter
+from useq import MDASequence
 
-from ..config import HW, USE_DEMO_CONFIG, AcquisitionSettings
-from .camera import CameraController
-from .galvo import GalvoController
-from .plogic import PLogicController
-from .stage import StageController
-
-mmc = CMMCorePlus.instance()
+# Import all the dedicated hardware controllers
+from .camera import CameraHardwareController
+from .crisp import CRISPHardwareController
+from .galvo import GalvoHardwareController
+from .plogic import PLogicHardwareController
+from .stage import StageHardwareController
 
 
 class HardwareAbstractionLayer:
     """
-    Hardware Abstraction Layer (HAL).
-
-    This class is the single point of entry for controlling the microscope hardware.
-    It follows the Facade design pattern, providing a simple, high-level API
-    that delegates calls to specialized controller components.
+    A Facade that provides a simplified, high-level interface to the
+    complex microscope hardware subsystem. This is the primary entry point
+    into the Model for the Controller (`engine.py`).
     """
 
-    def __init__(self, config_file_path: Optional[str] = None):
-        self.config_path: Optional[str] = config_file_path
-        self._initialize_mmc()
+    def __init__(self, mmc: CMMCorePlus):
+        self.mmc = mmc
 
-        # Compose the HAL from specialized controller components
-        self.camera = CameraController(mmc, self._set_property)
-        self.stage = StageController(mmc, self._set_property)
-        self.galvo = GalvoController(self._set_property)
-        self.plogic = PLogicController(self._execute_tiger_serial_command)
+        # The HAL instantiates and owns all hardware controllers
+        self._camera_ctrl = CameraHardwareController()
+        self._stage_ctrl = StageHardwareController()
+        self._galvo_ctrl = GalvoHardwareController()
+        self._plogic_ctrl = PLogicHardwareController()
+        self._crisp_ctrl = CRISPHardwareController()
 
-    # --- Public API ---
-    def setup_for_acquisition(self, settings: AcquisitionSettings):
-        """Prepares all hardware for a triggered acquisition sequence."""
-        print("\n--- Configuring devices for acquisition (standard path) ---")
-        self.camera.set_trigger_mode("Edge Trigger")
-        self.galvo.configure_for_scan(settings)
-        self.stage.configure_for_scan(settings)
-        self.plogic.program_for_acquisition(settings)
-        self.stage.set_idle()
-        print("--- Device configuration finished. ---")
+        # This would be loaded from a user-editable config file
+        self._com_port = "COM4"
+        self._crisp_addr = "32"  # From your cfg: CRISPAFocus:Z:32
 
-    def start_acquisition(self):
-        """Sends the master trigger to start the armed sequence."""
-        self.galvo.start()
+        # To store the MDA writer for proper cleanup
+        self._mda_writer: Optional[OMEZarrWriter] = None
 
-    def final_cleanup(self, settings: AcquisitionSettings):
-        """Resets hardware to a safe, idle state after acquisition."""
-        print("\n--- Performing final cleanup (standard path) ---")
-        self.galvo.set_idle()
-        self.stage.set_idle()
-        self.plogic.cleanup()
-        self.stage.reset_position(settings)
-        self.camera.set_trigger_mode("Internal Trigger")
-
-    def run_validated_test(self, settings: AcquisitionSettings):
-        """
-        Runs a self-contained test acquisition using the exact sequence
-        derived from the validated Micro-Manager log file. This method
-        is a generator that yields images as they are acquired.
-        """
-        print("\n--- Starting Validated Test Sequence ---")
-        initial_camera = mmc.getCameraDevice()
-        initial_auto_shutter = mmc.getAutoShutter()
-        initial_exposure = mmc.getExposure()
-        initial_trigger_mode = "Internal Trigger"
-
+    def _execute_serial_action(self, action, *args, **kwargs):
+        """Context manager for safe serial communication."""
         try:
-            # 1. Setup
-            print(f"Validated Test: Setting active camera to {self.camera.label}")
-            mmc.setCameraDevice(self.camera.label)
-            initial_trigger_mode = self.camera.mmc.getProperty(self.camera.label, "TriggerMode")
-            mmc.setAutoShutter(False)
-            mmc.setConfig("Lasers", "488nm")
-            self.camera.set_trigger_mode("Edge Trigger")
-            mmc.setExposure(settings.camera_exposure_ms)
-            self.galvo.configure_for_scan(settings)
-            self.plogic.program_for_acquisition(settings)
-            mmc.waitForSystem()
-            print("Validated Test: Devices configured.")
+            with serial.Serial(self._com_port, 115200, timeout=1) as ser:
+                return action(ser, *args, **kwargs)
+        except serial.SerialException as e:
+            raise ConnectionError(f"HAL: Failed to connect to Tiger on {self._com_port}: {e}")
 
-            # 2. Execution and Image Popping
-            mmc.startSequenceAcquisition(self.camera.label, settings.num_slices, 0, True)
-            self.galvo.start()
+    def setup_and_run_z_stack(self, params: dict):
+        """
+        The primary high-level method for the experiment. It coordinates all
+        hardware setup and then starts the MDA.
+        """
+        print("HAL: Coordinating hardware setup and running Z-stack...")
 
-            images_acquired = 0
-            while images_acquired < settings.num_slices:
-                if mmc.getRemainingImageCount() > 0:
-                    tagged_img = mmc.popNextTaggedImage()
-                    images_acquired += 1
-                    yield tagged_img.pix.reshape(mmc.getImageHeight(), mmc.getImageWidth())
-                else:
-                    time.sleep(0.001)  # Small sleep to prevent busy-waiting
+        # 1. Configure hardware
+        self._camera_ctrl.set_trigger_mode(self.mmc, "Level Trigger Mode")
 
-            print("Validated Test: Sequence complete.")
+        def setup_asi_hardware(ser):
+            self._galvo_ctrl.configure_for_z_stack(ser, params)
+            self._plogic_ctrl.configure_for_triggers(ser, params)
 
-        finally:
-            # 3. Cleanup
-            print("Validated Test: Cleaning up...")
-            if mmc.isSequenceRunning(self.camera.label):
-                mmc.stopSequenceAcquisition(self.camera.label)
+        self._execute_serial_action(setup_asi_hardware)
 
-            self.galvo.set_idle()
-            self.stage.set_idle()
-            self.plogic.cleanup()
-            self.camera.set_trigger_mode(initial_trigger_mode)
-            mmc.setExposure(initial_exposure)
-            mmc.setAutoShutter(initial_auto_shutter)
-            mmc.waitForSystem()
-            print(f"Validated Test: Restoring active camera to {initial_camera}")
-            mmc.setCameraDevice(initial_camera)
-            print("--- Validated Test Finished ---")
+        # 2. Define the acquisition sequence
+        sequence = MDASequence(time_plan=params["num_slices"])  # type: ignore
 
-    # --- Private Implementation ---
-    def _initialize_mmc(self):
-        """Loads hardware configuration from file or demo config."""
-        print("Initializing Hardware Abstraction Layer...")
-        if USE_DEMO_CONFIG:
-            try:
-                self._load_demo_config()
-                return
-            except Exception as e:
-                print(f"CRITICAL Error loading DEMO configuration: {e}")
-                traceback.print_exc()
-                raise
+        # 3. Setup the data writer, store it for cleanup, and connect events
+        self._mda_writer = OMEZarrWriter(params["save_path"], overwrite=True)
+        self.mmc.mda.events.sequenceStarted.connect(self._mda_writer.sequenceStarted)
+        self.mmc.mda.events.frameReady.connect(self._mda_writer.frameReady)
+        self.mmc.mda.events.sequenceFinished.connect(self._mda_writer.sequenceFinished)
 
-        if not self.config_path or not os.path.exists(self.config_path):
-            raise FileNotFoundError(f"Config file not found: {self.config_path}")
+        print("HAL: Starting MDA engine. System is armed and waiting for triggers.")
+        self.mmc.mda.run(sequence)
 
-        print(f"Attempting to load configuration: '{self.config_path}'")
-        try:
-            mmc.loadSystemConfiguration(self.config_path)
-            print("Configuration loaded successfully.")
-        except Exception as e:
-            print(f"CRITICAL Error loading configuration '{self.config_path}': {e}")
-            traceback.print_exc()
-            raise
+    def final_cleanup(self):
+        """
+        Called at the end of an acquisition to ensure a safe state and
+        disconnect event handlers to prevent memory leaks.
+        """
+        print("HAL: Performing final cleanup.")
+        if self._mda_writer:
+            self.mmc.mda.events.sequenceStarted.disconnect(self._mda_writer.sequenceStarted)
+            self.mmc.mda.events.frameReady.disconnect(self._mda_writer.frameReady)
+            self.mmc.mda.events.sequenceFinished.disconnect(self._mda_writer.sequenceFinished)
+            self._mda_writer = None
+            print("HAL: MDA writer disconnected.")
 
-    def _execute_tiger_serial_command(self, command_string: str):
-        """Executes a serial command on the TigerCommHub."""
-        if USE_DEMO_CONFIG:
-            print(f"DEMO MODE: Skipping serial command: {command_string}")
-            return
+    # --- Stage Control API ---
 
-        hub = HW.tiger_comm_hub_label
-        if hub not in mmc.getLoadedDevices() or not mmc.hasProperty(hub, "SerialCommand"):
-            print(f"Warning: Cannot send serial commands to '{hub}'.")
-            return
+    def move_stage_relative(self, axis: str, distance_um: float):
+        """Moves a stage axis by a relative amount in micrometers."""
+        self._execute_serial_action(self._stage_ctrl.move_relative, axis, distance_um)
 
-        original = mmc.getProperty(hub, "OnlySendSerialCommandOnChange")
-        if original == "Yes":
-            mmc.setProperty(hub, "OnlySendSerialCommandOnChange", "No")
+    def get_stage_position_um(self, axes: list[str]) -> dict[str, float]:
+        """Gets the current position of one or more axes in micrometers."""
+        return self._execute_serial_action(self._stage_ctrl.get_position_um, axes)
 
-        mmc.setProperty(hub, "SerialCommand", command_string)
+    def wait_for_stage(self):
+        """Waits for all stage motion to complete."""
+        self._execute_serial_action(self._stage_ctrl.wait_for_device)
 
-        if original == "Yes":
-            mmc.setProperty(hub, "OnlySendSerialCommandOnChange", "Yes")
-        time.sleep(0.02)
+    # --- CRISP Control API ---
 
-    def _set_property(self, device_label: str, prop_name: str, value: Any):
-        """Safely sets a property on a device if it has changed."""
-        if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, prop_name):
-            if mmc.getProperty(device_label, prop_name) != str(value):
-                mmc.setProperty(device_label, prop_name, value)
-        elif not USE_DEMO_CONFIG:
-            print(f"Warning: Cannot set '{prop_name}' for '{device_label}'.")
+    def crisp_lock(self):
+        """Engages the CRISP lock."""
+        self._execute_serial_action(self._crisp_ctrl.lock, self._crisp_addr)
 
-    def _load_demo_config(self):
-        """Programmatically loads a demo configuration for testing."""
-        print("Programmatically loading DEMO configuration...")
-        mmc.loadDevice(HW.camera_a_label, "DemoCamera", "DCam")
-        mmc.loadDevice(HW.piezo_a_label, "DemoCamera", "DStage")
-        mmc.loadDevice(HW.galvo_a_label, "DemoCamera", "DXYStage")
-        mmc.loadDevice(HW.tiger_comm_hub_label, "DemoCamera", "DShutter")
-        mmc.loadDevice(HW.plogic_label, "DemoCamera", "DShutter")
-        mmc.initializeAllDevices()
-        mmc.setFocusDevice(HW.piezo_a_label)
-        mmc.definePixelSizeConfig("px")
-        mmc.setPixelSizeUm("px", 1.0)
+    def crisp_unlock(self):
+        """Disengages the CRISP lock."""
+        self._execute_serial_action(self._crisp_ctrl.unlock, self._crisp_addr)
+
+    def crisp_save_calibration(self):
+        """Saves the current CRISP calibration to the card."""
+        self._execute_serial_action(self._crisp_ctrl.save_calibration, self._crisp_addr)
+
+    # --- Camera Control API ---
+
+    def set_camera_exposure(self, exposure_ms: float):
+        """Sets the exposure time for the active camera(s)."""
+        self._camera_ctrl.set_exposure(self.mmc, exposure_ms)
+
+    def get_camera_exposure(self) -> float:
+        """Gets the current exposure time from the core."""
+        return self._camera_ctrl.get_exposure(self.mmc)

@@ -111,7 +111,7 @@ name = "click"
 version = "8.1.8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "platform_system == 'Windows'" },
+    { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/b9/2e/0090cbf739cee7d23781ad4b89a9894a41538e4fcf4c31dcdd705b78eb8b/click-8.1.8.tar.gz", hash = "sha256:ed53c9d8990d83c2a27deae68e4ee337473f6330c040a31d4225c9574d16096a", size = 226593 }
 wheels = [
@@ -201,6 +201,7 @@ dependencies = [
     { name = "pillow" },
     { name = "pymmcore-plus", version = "0.13.7", source = { registry = "https://pypi.org/simple" }, extra = ["cli", "io"], marker = "python_full_version >= '3.13'" },
     { name = "pymmcore-plus", version = "0.15.0", source = { registry = "https://pypi.org/simple" }, extra = ["cli", "io"], marker = "python_full_version < '3.13'" },
+    { name = "pyserial" },
     { name = "pyside6" },
     { name = "qtpy" },
     { name = "tifffile" },
@@ -217,6 +218,7 @@ requires-dist = [
     { name = "numpy" },
     { name = "pillow" },
     { name = "pymmcore-plus", extras = ["cli", "io"] },
+    { name = "pyserial", specifier = ">=3.5" },
     { name = "pyside6" },
     { name = "qtpy" },
     { name = "ruff", marker = "extra == 'dev'" },
@@ -755,6 +757,15 @@ cli = [
 io = [
     { name = "tifffile", marker = "python_full_version < '3.13'" },
     { name = "zarr", marker = "python_full_version < '3.13'" },
+]
+
+[[package]]
+name = "pyserial"
+version = "3.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1e/7d/ae3f0a63f41e4d2f6cb66a5b57197850f919f59e558159a4dd3a818f5082/pyserial-3.5.tar.gz", hash = "sha256:3c77e014170dfffbd816e6ffc205e9842efb10be9f58ec16d3e8675b4925cddb", size = 159125 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/bc/587a445451b253b285629263eb51c2d8e9bcea4fc97826266d186f96f558/pyserial-3.5-py2.py3-none-any.whl", hash = "sha256:c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0", size = 90585 },
 ]
 
 [[package]]

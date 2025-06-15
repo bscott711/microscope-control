@@ -1,384 +1,117 @@
-# src/microscope/ui/main_window.py
-
-import time  # <--- Added import
-
-import numpy as np
-from magicgui import magicgui
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import Signal, Slot
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QFileDialog,
     QFormLayout,
-    QGridLayout,
     QHBoxLayout,
-    QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from ..config import AcquisitionSettings
-from ..core.engine import AcquisitionEngine
-from ..hardware.hal import HardwareAbstractionLayer, mmc
 
+class MainWindow(QMainWindow):
+    """
+    The main user interface window (the View). It is responsible for
+    displaying widgets and emitting signals on user interaction.
+    """
 
-@magicgui(
-    call_button=False,
-    layout="form",
-    save_dir={"widget_type": "FileEdit", "mode": "d", "label": "Save Directory"},
-    num_time_points={"label": "Time Points"},
-    time_interval_s={"label": "Interval (s)"},
-    minimal_interval={"label": "Minimal Interval"},
-    num_slices={"label": "Slices/Volume"},
-    laser_trig_duration_ms={"label": "Laser Duration (ms)"},
-    step_size_um={"label": "Step Size (µm)"},
-    should_save={"label": "Save to Disk"},
-    save_prefix={"label": "File Prefix"},
-)
-def acquisition_widget(
-    num_time_points: int = 1,
-    time_interval_s: float = 10.0,
-    minimal_interval: bool = False,
-    num_slices: int = 10,
-    laser_trig_duration_ms: float = 10.0,
-    step_size_um: float = 1.0,
-    should_save: bool = False,
-    save_dir="",
-    save_prefix: str = "acquisition",
-):
-    """Magicgui widget for acquisition parameters."""
-    pass
+    start_acquisition_requested = Signal(dict)
+    cancel_acquisition_requested = Signal()
 
-
-class AcquisitionGUI(QMainWindow):
-    def __init__(self, hal: HardwareAbstractionLayer):
+    def __init__(self):
         super().__init__()
-        self.hal = hal
-        self.settings = AcquisitionSettings()
-        self.setWindowTitle("ASI OPM Acquisition Control")
-        self.setMinimumSize(600, 700)
+        self.setWindowTitle("Microscope Control")
 
-        self.acquisition_in_progress = False
-        self.cancel_requested = False
-        self.pixel_size_um = 1.0
-        self.engine = None
-        self.acquisition_thread = None
-        self._snap_thread = None
-        self._snap_worker = None
-        self._validated_test_thread = None
-        self._validated_test_worker = None
+        # --- UI Elements ---
+        self.z_step_input = QLineEdit("1.0")
+        self.num_slices_input = QLineEdit("150")
+        self.exposure_input = QLineEdit("10.0")
+        self.save_dir_input = QLineEdit("./acquisition_data")
+        self.save_prefix_input = QLineEdit("ZStack")
 
-        self._create_main_widgets()
-        self._layout_widgets()
+        self.browse_button = QPushButton("Browse...")
+        self.demo_mode_checkbox = QCheckBox("Run in Demo Mode")
+        self.demo_mode_checkbox.setChecked(True)
 
-        self.live_timer = QTimer()
-        self.live_timer.timeout.connect(self._on_live_timer)
-        self.live_timer.setInterval(int(self.settings.camera_exposure_ms))
+        self.start_button = QPushButton("Start Z-Stack")
+        self.cancel_button = QPushButton("Cancel Acquisition")
 
-        self._connect_signals()
-        self._update_all_estimates()
+        # FIX: Replace QLabel with a read-only QTextEdit for copy-paste
+        self.status_display = QTextEdit()
+        self.status_display.setReadOnly(True)
+        self.status_display.setMaximumHeight(80)  # Prevent it from taking too much space
+        self.status_display.setText("Status: Idle. Select a config file to load.")
 
-    class SnapWorker(QObject):
-        """A simple worker to snap an image in a separate thread."""
-
-        finished = Signal()
-        image_snapped = Signal(np.ndarray)
-
-        @Slot()
-        def run(self):
-            try:
-                mmc.snapImage()
-                image = mmc.getImage()
-                self.image_snapped.emit(image)
-            except Exception as e:
-                print(f"Error during snap worker: {e}")
-            finally:
-                self.finished.emit()
-
-    class ValidatedTestWorker(QObject):
-        """Worker to run the validated HAL test sequence."""
-
-        finished = Signal()
-        status = Signal(str)
-        image_ready = Signal(np.ndarray)
-
-        def __init__(self, hal: HardwareAbstractionLayer, settings: AcquisitionSettings):
-            super().__init__()
-            self.hal = hal
-            self.settings = settings
-
-        @Slot()
-        def run(self):
-            try:
-                for image in self.hal.run_validated_test(self.settings):
-                    self.image_ready.emit(image)
-                    # --- FIX: Add a small sleep to allow the GUI to process the image ---
-                    time.sleep(0.01)
-                self.status.emit("Validated test finished successfully.")
-            except Exception as e:
-                self.status.emit(f"Error in validated test: {e}")
-            finally:
-                self.finished.emit()
-
-    def _create_main_widgets(self):
-        """Creates all the widgets for the main window."""
-        self.controls_widget = acquisition_widget.native
-        self.estimates_widget = self._create_estimates_widget()
-        self.image_display = QLabel("Camera Image")
-        self.image_display.setMinimumSize(512, 512)
-        self.image_display.setStyleSheet("background-color: black;")
-
-        self.snap_button = QPushButton("Snap")
-        self.live_button = QPushButton("Live")
-        self.live_button.setCheckable(True)
-        self.run_button = QPushButton("Run Time Series")
-        self.validated_test_button = QPushButton("Run Validated Test")
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setEnabled(False)
-
-    def _create_estimates_widget(self) -> QWidget:
-        """Creates the widget for displaying estimated acquisition times."""
-        widget = QWidget()
-        layout = QFormLayout()
-        widget.setLayout(layout)
-        self.cam_exposure_label = QLabel()
-        self.min_interval_label = QLabel()
-        self.total_time_label = QLabel()
-        layout.addRow("Camera Exposure:", self.cam_exposure_label)
-        layout.addRow("Min. Interval/Volume:", self.min_interval_label)
-        layout.addRow("Est. Total Time:", self.total_time_label)
-        return widget
-
-    def _layout_widgets(self):
-        """Arranges all the widgets in the main window."""
+        # --- Layout ---
         central_widget = QWidget()
-        main_layout = QVBoxLayout()
-        central_widget.setLayout(main_layout)
-        grid_layout = QGridLayout()
-        grid_layout.addWidget(self.controls_widget, 0, 0)
-        grid_layout.addWidget(self.estimates_widget, 0, 1)
-        main_layout.addLayout(grid_layout)
-        main_layout.addWidget(self.image_display)
+        layout = QVBoxLayout(central_widget)
+        form_layout = QFormLayout()
 
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(self.snap_button)
-        button_layout.addWidget(self.live_button)
-        button_layout.addStretch()
-        button_layout.addWidget(self.validated_test_button)
-        button_layout.addWidget(self.run_button)
-        button_layout.addWidget(self.cancel_button)
-        main_layout.addLayout(button_layout)
+        dir_widget = QWidget()
+        dir_layout = QHBoxLayout(dir_widget)
+        dir_layout.setContentsMargins(0, 0, 0, 0)
+        dir_layout.addWidget(self.save_dir_input)
+        dir_layout.addWidget(self.browse_button)
+
+        form_layout.addRow("Z-Step (µm):", self.z_step_input)
+        form_layout.addRow("Number of Slices:", self.num_slices_input)
+        form_layout.addRow("Exposure (ms):", self.exposure_input)
+        form_layout.addRow("Save Directory:", dir_widget)
+        form_layout.addRow("Save Prefix:", self.save_prefix_input)
+        form_layout.addRow(self.demo_mode_checkbox)
+
+        layout.addLayout(form_layout)
+        layout.addWidget(self.start_button)
+        layout.addWidget(self.cancel_button)
+        layout.addWidget(self.status_display)  # Add the new QTextEdit to the layout
 
         self.setCentralWidget(central_widget)
 
-    def _connect_signals(self):
-        """Connects widget signals to their corresponding slots."""
-        self.snap_button.clicked.connect(self._on_snap)
-        self.live_button.toggled.connect(self._on_live_toggled)
-        self.run_button.clicked.connect(self.start_time_series)
-        self.validated_test_button.clicked.connect(self._on_run_validated_test)
-        self.cancel_button.clicked.connect(self._request_cancel)
-        acquisition_widget.changed.connect(self._update_all_estimates)
+        # --- Connect internal UI signals ---
+        self.start_button.clicked.connect(self._on_start_clicked)
+        self.cancel_button.clicked.connect(self.cancel_acquisition_requested)
+        self.browse_button.clicked.connect(self._on_browse_clicked)
+
+    def _on_start_clicked(self):
+        """Gathers parameters and emits the request signal."""
+        params = {
+            "z_step_um": float(self.z_step_input.text()),
+            "num_slices": int(self.num_slices_input.text()),
+            "camera_exposure_ms": float(self.exposure_input.text()),
+            "laser_duration_ms": float(self.exposure_input.text()),
+            "save_dir": self.save_dir_input.text(),
+            "save_prefix": self.save_prefix_input.text(),
+            "should_save": True,
+            "galvo_card_addr": "33",
+            "galvo_axis": "A",
+            "plogic_card_addr": "36",
+            "plogic_axis_letter": "E",
+            "microns_per_degree": 100.0,
+        }
+        self.start_acquisition_requested.emit(params)
+
+    def _on_browse_clicked(self):
+        """Opens a dialog to select a save directory."""
+        dir = QFileDialog.getExistingDirectory(self, "Select Save Directory")
+        if dir:
+            self.save_dir_input.setText(dir)
+
+    @Slot(str)
+    def update_status(self, message: str):
+        """Public slot for the Controller to update the status display."""
+        # Use setText for QTextEdit. It will correctly handle multi-line text.
+        self.status_display.setText(f"Status: {message}")
 
     @Slot()
-    def _on_run_validated_test(self):
-        """Runs the validated test sequence in a separate thread."""
-        if self.acquisition_in_progress:
-            return
-
-        self._set_controls_for_acquisition(True)
-        self.statusBar().showMessage("Running validated test sequence...")
-
-        thread = QThread()
-        worker = self.ValidatedTestWorker(self.hal, self.settings)
-
-        self._validated_test_thread = thread
-        self._validated_test_worker = worker
-
-        worker.moveToThread(thread)
-
-        worker.status.connect(self.statusBar().showMessage)
-        worker.image_ready.connect(self.display_image)
-
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_validated_test_finished)
-
-        thread.started.connect(worker.run)
-        thread.start()
+    def on_acquisition_started(self):
+        self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
 
     @Slot()
-    def _on_validated_test_finished(self):
-        """Cleans up after the validated test thread is finished."""
-        self._set_controls_for_acquisition(False)
-        self._validated_test_thread = None
-        self._validated_test_worker = None
-
-    @Slot()
-    def _on_snap(self):
-        """Acquires and displays a single image using a worker thread."""
-        if self._snap_thread and self._snap_thread.isRunning():
-            return
-
-        self.snap_button.setEnabled(False)
-        mmc.setExposure(self.settings.camera_exposure_ms)
-
-        thread = QThread()
-        worker = self.SnapWorker()
-        self._snap_thread = thread
-        self._snap_worker = worker
-        worker.moveToThread(thread)
-
-        worker.image_snapped.connect(self._display_snapped_image)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_snap_finished)
-
-        thread.started.connect(worker.run)
-        thread.start()
-
-    @Slot()
-    def _on_snap_finished(self):
-        """Re-enables the snap button after the thread is finished."""
-        self.snap_button.setEnabled(True)
-        self._snap_thread = None
-        self._snap_worker = None
-
-    @Slot(np.ndarray)
-    def _display_snapped_image(self, image: np.ndarray):
-        """Displays an image that was acquired by the SnapWorker."""
-        self.display_image(image)
-
-    @Slot(bool)
-    def _on_live_toggled(self, checked: bool):
-        if checked:
-            if self.acquisition_in_progress:
-                self.live_button.setChecked(False)
-                return
-            try:
-                mmc.setExposure(self.settings.camera_exposure_ms)
-                mmc.startContinuousSequenceAcquisition(0)
-                self.live_timer.start()
-                self._set_controls_for_live(True)
-                self.statusBar().showMessage("Live view running...")
-            except Exception as e:
-                print(f"Error starting live view: {e}")
-                self.live_button.setChecked(False)
-        else:
-            self.live_timer.stop()
-            if mmc.isSequenceRunning():
-                mmc.stopSequenceAcquisition()
-            self._set_controls_for_live(False)
-            self.statusBar().showMessage("Live view stopped.", 3000)
-
-    def _set_controls_for_live(self, is_live: bool):
-        self.run_button.setEnabled(not is_live)
-        self.validated_test_button.setEnabled(not is_live)
-        self.snap_button.setEnabled(not is_live)
-
-    @Slot()
-    def _on_live_timer(self):
-        if mmc.getRemainingImageCount() > 0:
-            image = mmc.getLastImage()
-            self.display_image(image)
-
-    @Slot()
-    def _update_all_estimates(self):
-        params = acquisition_widget.asdict()
-        self.settings.num_slices = params["num_slices"]
-        self.settings.laser_trig_duration_ms = params["laser_trig_duration_ms"]
-        self.settings.step_size_um = params["step_size_um"]
-        self.settings.time_points = params["num_time_points"]
-        self.settings.time_interval_s = params["time_interval_s"]
-        self.settings.is_minimal_interval = params["minimal_interval"]
-        self.settings.should_save = params["should_save"]
-        self.settings.save_dir = str(params["save_dir"])
-        self.settings.save_prefix = params["save_prefix"]
-
-        exposure = self.settings.camera_exposure_ms
-        self.cam_exposure_label.setText(f"{exposure:.2f} ms")
-        self.live_timer.setInterval(int(exposure))
-        min_interval_s = self._calculate_minimal_interval()
-        self.min_interval_label.setText(f"{min_interval_s:.2f} s")
-        self.total_time_label.setText(self._calculate_total_time(min_interval_s, self.settings.time_points))
-
-    def _calculate_minimal_interval(self) -> float:
-        exposure_ms = self.settings.camera_exposure_ms * self.settings.num_slices
-        return (exposure_ms * 1.10) / 1000.0
-
-    def _calculate_total_time(self, min_interval_s: float, num_time_points: int) -> str:
-        interval = (
-            min_interval_s if self.settings.is_minimal_interval else max(self.settings.time_interval_s, min_interval_s)
-        )
-        total_seconds = interval * num_time_points
-        h, rem = divmod(total_seconds, 3600)
-        m, s = divmod(rem, 60)
-        return f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
-
-    @Slot()
-    def start_time_series(self):
-        if self.acquisition_in_progress:
-            return
-        if self.live_button.isChecked():
-            self.live_button.setChecked(False)
-
-        try:
-            self.pixel_size_um = mmc.getPixelSizeUm() or 1.0
-        except Exception:
-            self.pixel_size_um = 1.0
-            self.statusBar().showMessage("Warning: Could not get pixel size.", 3000)
-
-        self._set_controls_for_acquisition(True)
-        self.cancel_requested = False
-
-        self.acquisition_thread = QThread()
-        self.engine = AcquisitionEngine(self.hal, self.settings)
-        self.engine.moveToThread(self.acquisition_thread)
-
-        self.engine.acquisition_finished.connect(self._finish_time_series)
-        self.engine.status_updated.connect(self.statusBar().showMessage)
-        self.engine.new_image_ready.connect(self.display_image)
-
-        self.acquisition_thread.started.connect(self.engine.run_acquisition)
-        self.engine.acquisition_finished.connect(self.acquisition_thread.quit)
-        self.acquisition_thread.finished.connect(self.engine.deleteLater)
-        self.acquisition_thread.finished.connect(self.acquisition_thread.deleteLater)
-
-        self.acquisition_thread.start()
-
-    @Slot()
-    def _request_cancel(self):
-        if self.acquisition_in_progress and self.engine:
-            self.statusBar().showMessage("Cancellation requested...")
-            self.engine.cancel()
-
-    def _set_controls_for_acquisition(self, is_running: bool):
-        self.acquisition_in_progress = is_running
-        self.controls_widget.setEnabled(not is_running)
-        self.run_button.setEnabled(not is_running)
-        self.validated_test_button.setEnabled(not is_running)
-        self.live_button.setEnabled(not is_running)
-        self.snap_button.setEnabled(not is_running)
-        self.cancel_button.setEnabled(is_running)
-
-    @Slot()
-    def _finish_time_series(self):
-        status = "Cancelled" if self.cancel_requested else "Acquisition finished."
-        self.statusBar().showMessage(status, 5000)
-        self._set_controls_for_acquisition(False)
-        self.hal.final_cleanup(self.settings)
-
-    @Slot(np.ndarray)
-    def display_image(self, image: np.ndarray):
-        h, w = image.shape
-        img_range = (image.max() - image.min()) or 1
-        norm = ((image - image.min()) / img_range * 255).astype(np.uint8)
-        q_image = QImage(norm.data, w, h, w, QImage.Format.Format_Grayscale8)
-        pixmap = QPixmap.fromImage(q_image).scaled(
-            self.image_display.size(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.image_display.setPixmap(pixmap)
+    def on_acquisition_finished(self):
+        self.start_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
