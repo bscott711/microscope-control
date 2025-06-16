@@ -1,21 +1,32 @@
-import os
 import sys
 from pathlib import Path
 
-# --- Disable pyconify caching to prevent warnings ---
-os.environ["PYCONIFY_CACHE_DIR"] = "NEVER"
 
-from pymmcore_plus import CMMCorePlus
-from qtpy.QtWidgets import QApplication
-
-from ..core.engine import AcquisitionEngine
-from ..hardware.hal import HardwareAbstractionLayer
-from .main_window import MainWindow
+def find_project_root() -> Path:
+    """Find the project root by searching upwards for `pyproject.toml`."""
+    current_path = Path(__file__).resolve()
+    for parent in current_path.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    raise FileNotFoundError("Could not find project root containing 'pyproject.toml'.")
 
 
 def main():
     """Main function to run the application."""
+
+    # --- Imports are moved here, after the environment setup ---
+    from pymmcore_plus import CMMCorePlus
+    from qtpy.QtWidgets import QApplication
+
+    from ..core.engine import AcquisitionEngine
+    from ..hardware.hal import HardwareAbstractionLayer
+    from .main_window import MainWindow
+
+    # --- Start of Application Logic ---
     app = QApplication(sys.argv)
+
+    # Find the project root once at startup
+    project_root = find_project_root()
 
     # 1. Create the core objects
     mmc = CMMCorePlus.instance()
@@ -29,12 +40,8 @@ def main():
         is_demo = view.demo_mode_checkbox.isChecked()
         config_file = "demo.cfg" if is_demo else "20250523-OPM.cfg"
 
-        # Corrected path to look in the project root (one level above 'src')
-        config_path = (
-            Path(__file__).resolve().parent.parent.parent.parent
-            / "hardware_profiles"
-            / config_file
-        )
+        # Robustly build the path from the discovered project root
+        config_path = project_root / "hardware_profiles" / config_file
 
         view.update_status(f"Loading config: {config_file}...")
         if config_path.exists():

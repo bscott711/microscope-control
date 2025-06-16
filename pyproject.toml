@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # --- Core Project Metadata ---
 [project]
 name = "microscope-control"
-version = "0.1.0.dev4"
+version = "0.1.0.dev5"
 description = "OPM Control System"
 readme = "README.md"
 license = "MIT"
@@ -29,13 +29,13 @@ dependencies = [
     # GUI Framework
     "pyside6",
     "qtpy",
-    "magicgui>=0.10.0",
     # Data & Imaging
     "numpy",
     "pillow",
     "tifffile",
     "pyserial>=3.5",
     "pymmcore-widgets>=0.9.1",
+    "magicgui>=0.10.1",
 ]
 
 [project.optional-dependencies]

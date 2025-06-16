@@ -5,7 +5,7 @@ from pymmcore_widgets import (
     ImagePreview,
     StageWidget,
 )
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal  # Corrected import for Signal
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -86,25 +86,13 @@ class MainWindow(QMainWindow):
         stage_widget = StageWidget(device=focus_device)
         stage_widget.setEnabled(bool(focus_device))
 
-        # REMOVED Objective and Channel widgets
-        # objectives_widget = PresetComboBox(config_group="Objective")
-        # channels_widget = PresetComboBox(config_group="Channel")
-
         cam_dock = QDockWidget("Camera", self)
         cam_dock.setWidget(camera_widget)
         stage_dock = QDockWidget("Stage", self)
         stage_dock.setWidget(stage_widget)
-        # REMOVED Objective and Channel docks
-        # obj_dock = QDockWidget("Objectives", self)
-        # obj_dock.setWidget(objectives_widget)
-        # channel_dock = QDockWidget("Channels", self)
-        # channel_dock.setWidget(channels_widget)
 
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, cam_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, stage_dock)
-        # REMOVED addDockWidget calls for Objective and Channel docks
-        # self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, obj_dock)
-        # self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, channel_dock)
 
         # Corrected tabbing to only include remaining widgets
         self.tabifyDockWidget(cam_dock, stage_dock)
