@@ -1,6 +1,7 @@
 # src/microscope/ui/main_window.py
-
-import time  # <--- Added import
+import logging
+import sys
+import time
 
 import numpy as np
 from magicgui import magicgui
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
 from ..config import AcquisitionSettings
 from ..core.engine import AcquisitionEngine
 from ..hardware.hal import HardwareAbstractionLayer, mmc
+from .qt_logger import QtLogger
 
 
 @magicgui(
@@ -56,7 +59,7 @@ class AcquisitionGUI(QMainWindow):
         self.hal = hal
         self.settings = AcquisitionSettings()
         self.setWindowTitle("ASI OPM Acquisition Control")
-        self.setMinimumSize(600, 700)
+        self.setMinimumSize(800, 700)  # Increased min width for new layout
 
         self.acquisition_in_progress = False
         self.cancel_requested = False
@@ -70,6 +73,7 @@ class AcquisitionGUI(QMainWindow):
 
         self._create_main_widgets()
         self._layout_widgets()
+        self._setup_logging()
 
         self.live_timer = QTimer()
         self.live_timer.timeout.connect(self._on_live_timer)
@@ -77,6 +81,7 @@ class AcquisitionGUI(QMainWindow):
 
         self._connect_signals()
         self._update_all_estimates()
+        logging.info("Application started.")
 
     class SnapWorker(QObject):
         """A simple worker to snap an image in a separate thread."""
@@ -91,7 +96,7 @@ class AcquisitionGUI(QMainWindow):
                 image = mmc.getImage()
                 self.image_snapped.emit(image)
             except Exception as e:
-                print(f"Error during snap worker: {e}")
+                logging.error(f"Error during snap worker: {e}")
             finally:
                 self.finished.emit()
 
@@ -112,11 +117,11 @@ class AcquisitionGUI(QMainWindow):
             try:
                 for image in self.hal.run_validated_test(self.settings):
                     self.image_ready.emit(image)
-                    # --- FIX: Add a small sleep to allow the GUI to process the image ---
                     time.sleep(0.01)
                 self.status.emit("Validated test finished successfully.")
             except Exception as e:
                 self.status.emit(f"Error in validated test: {e}")
+                logging.error(f"Error in validated test: {e}")
             finally:
                 self.finished.emit()
 
@@ -127,6 +132,7 @@ class AcquisitionGUI(QMainWindow):
         self.image_display = QLabel("Camera Image")
         self.image_display.setMinimumSize(512, 512)
         self.image_display.setStyleSheet("background-color: black;")
+        self.image_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.snap_button = QPushButton("Snap")
         self.live_button = QPushButton("Live")
@@ -135,6 +141,9 @@ class AcquisitionGUI(QMainWindow):
         self.validated_test_button = QPushButton("Run Validated Test")
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
+
+        self.log_widget = QPlainTextEdit()
+        self.log_widget.setReadOnly(True)
 
     def _create_estimates_widget(self) -> QWidget:
         """Creates the widget for displaying estimated acquisition times."""
@@ -152,14 +161,43 @@ class AcquisitionGUI(QMainWindow):
     def _layout_widgets(self):
         """Arranges all the widgets in the main window."""
         central_widget = QWidget()
-        main_layout = QVBoxLayout()
-        central_widget.setLayout(main_layout)
+        self.setCentralWidget(central_widget)
+
+        # Main layout is vertical (controls -> mid-section -> buttons)
+        main_layout = QVBoxLayout(central_widget)
+
+        # Top-level controls remain in a grid
         grid_layout = QGridLayout()
         grid_layout.addWidget(self.controls_widget, 0, 0)
         grid_layout.addWidget(self.estimates_widget, 0, 1)
         main_layout.addLayout(grid_layout)
-        main_layout.addWidget(self.image_display)
 
+        # --- MODIFIED SECTION: Place Image and Log Side-by-Side ---
+        # Create a horizontal layout for the middle section
+        middle_section_layout = QHBoxLayout()
+
+        # Add the image display to the left of the middle section
+        middle_section_layout.addWidget(self.image_display)
+
+        # Create a vertical layout for the log and its label
+        log_layout = QVBoxLayout()
+        log_layout.addWidget(QLabel("Log:"))
+        log_layout.addWidget(self.log_widget)
+
+        # Add the log layout to the right of the middle section
+        middle_section_layout.addLayout(log_layout)
+
+        # Give the image display more horizontal space than the log
+        middle_section_layout.setStretchFactor(self.image_display, 3)
+        middle_section_layout.setStretchFactor(log_layout, 2)
+
+        # Add the entire middle section to the main vertical layout
+        main_layout.addLayout(middle_section_layout)
+        # Allow the middle section to expand vertically
+        main_layout.setStretchFactor(middle_section_layout, 1)
+        # --- END OF MODIFIED SECTION ---
+
+        # Bottom button layout remains the same
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.snap_button)
         button_layout.addWidget(self.live_button)
@@ -169,7 +207,23 @@ class AcquisitionGUI(QMainWindow):
         button_layout.addWidget(self.cancel_button)
         main_layout.addLayout(button_layout)
 
-        self.setCentralWidget(central_widget)
+    def _setup_logging(self):
+        """
+        Configures the Python logging module to send output to the GUI log widget
+        and redirects stdout/stderr.
+        """
+        self.log_handler = QtLogger(self)  # Pass self as parent
+        self.log_handler.new_log_entry.connect(self.log_widget.appendPlainText)
+
+        log_format = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        self.log_handler.setFormatter(log_format)
+
+        root_logger = logging.getLogger()
+        root_logger.addHandler(self.log_handler)
+        root_logger.setLevel(logging.INFO)
+
+        sys.stdout = self.log_handler
+        sys.stderr = self.log_handler
 
     def _connect_signals(self):
         """Connects widget signals to their corresponding slots."""
@@ -188,6 +242,7 @@ class AcquisitionGUI(QMainWindow):
 
         self._set_controls_for_acquisition(True)
         self.statusBar().showMessage("Running validated test sequence...")
+        logging.info("Starting validated test sequence...")
 
         thread = QThread()
         worker = self.ValidatedTestWorker(self.hal, self.settings)
@@ -214,6 +269,7 @@ class AcquisitionGUI(QMainWindow):
         self._set_controls_for_acquisition(False)
         self._validated_test_thread = None
         self._validated_test_worker = None
+        logging.info("Validated test finished.")
 
     @Slot()
     def _on_snap(self):
@@ -258,13 +314,14 @@ class AcquisitionGUI(QMainWindow):
                 self.live_button.setChecked(False)
                 return
             try:
+                logging.info("Starting live view...")
                 mmc.setExposure(self.settings.camera_exposure_ms)
                 mmc.startContinuousSequenceAcquisition(0)
                 self.live_timer.start()
                 self._set_controls_for_live(True)
                 self.statusBar().showMessage("Live view running...")
             except Exception as e:
-                print(f"Error starting live view: {e}")
+                logging.error(f"Error starting live view: {e}")
                 self.live_button.setChecked(False)
         else:
             self.live_timer.stop()
@@ -272,6 +329,7 @@ class AcquisitionGUI(QMainWindow):
                 mmc.stopSequenceAcquisition()
             self._set_controls_for_live(False)
             self.statusBar().showMessage("Live view stopped.", 3000)
+            logging.info("Live view stopped.")
 
     def _set_controls_for_live(self, is_live: bool):
         self.run_button.setEnabled(not is_live)
@@ -329,6 +387,7 @@ class AcquisitionGUI(QMainWindow):
         except Exception:
             self.pixel_size_um = 1.0
             self.statusBar().showMessage("Warning: Could not get pixel size.", 3000)
+            logging.warning("Could not get pixel size.")
 
         self._set_controls_for_acquisition(True)
         self.cancel_requested = False
@@ -352,6 +411,7 @@ class AcquisitionGUI(QMainWindow):
     def _request_cancel(self):
         if self.acquisition_in_progress and self.engine:
             self.statusBar().showMessage("Cancellation requested...")
+            logging.info("Cancellation requested by user.")
             self.engine.cancel()
 
     def _set_controls_for_acquisition(self, is_running: bool):
@@ -367,14 +427,18 @@ class AcquisitionGUI(QMainWindow):
     def _finish_time_series(self):
         status = "Cancelled" if self.cancel_requested else "Acquisition finished."
         self.statusBar().showMessage(status, 5000)
+        logging.info(status)
         self._set_controls_for_acquisition(False)
         self.hal.final_cleanup(self.settings)
 
     @Slot(np.ndarray)
     def display_image(self, image: np.ndarray):
         h, w = image.shape
-        img_range = (image.max() - image.min()) or 1
-        norm = ((image - image.min()) / img_range * 255).astype(np.uint8)
+        # Normalize for display
+        img_min, img_max = image.min(), image.max()
+        img_range = (img_max - img_min) or 1
+        norm = ((image - img_min) / img_range * 255).astype(np.uint8)
+
         q_image = QImage(norm.data, w, h, w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(q_image).scaled(
             self.image_display.size(),

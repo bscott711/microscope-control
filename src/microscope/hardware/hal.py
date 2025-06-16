@@ -105,6 +105,11 @@ class HardwareAbstractionLayer:
             if mmc.isSequenceRunning(self.camera.label):
                 mmc.stopSequenceAcquisition(self.camera.label)
 
+            # *** FIX: Set the test camera to a safe state before switching ***
+            self.camera.set_trigger_mode("Internal")  # Or whatever the default idle is
+            mmc.waitForDevice(self.camera.label)
+            # *****************************************************************
+
             self.galvo.set_idle()
             self.stage.set_idle()
             self.plogic.cleanup()
