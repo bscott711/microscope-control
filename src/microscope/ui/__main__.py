@@ -20,7 +20,7 @@ def main():
 
     # FIX: Pass both the 'hal' (Model) and the 'view' (View)
     # to the 'engine' (Controller).
-    engine = AcquisitionEngine(hal=hal, view=view)
+    engine = AcquisitionEngine(hal=hal, view=view)  # noqa: F841
 
     # 2. Handle Demo Mode vs. Real Hardware
     def load_config():
