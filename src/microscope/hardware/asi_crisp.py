@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import CMMCorePlus, main_core_singleton
+from pymmcore_plus import CMMCorePlus
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -38,13 +38,13 @@ class ASICrispCommands:
         crisp_device_label: str,
         mmc: CMMCorePlus | None = None,
     ) -> None:
-        self._mmc = mmc or main_core_singleton()
+        self._mmc = mmc or CMMCorePlus.instance()
         self._label = crisp_device_label
 
     def _send(self, command: str, with_dev_label: bool = True) -> str:
         """Send a command to the CRISP device and get the response."""
         full_command = f"{self._label} {command}" if with_dev_label else command
-        port = self._mmc.getSerialPortName(self._label)
+        port = self._mmc.getProperty(self._label, "Port")
         self._mmc.setSerialPortCommand(port, full_command, "\r")
         return self._mmc.getSerialPortAnswer(port, "\r")
 

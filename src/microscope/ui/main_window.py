@@ -1,17 +1,37 @@
-# Import all necessary pre-built widgets from the library
+import sys
+
 from pymmcore_widgets import (
-    ConfigurationWidget,
+    DefaultCameraExposureWidget,
     ImagePreview,
-    MDAWidget,
     StageWidget,
 )
+from PySide6.QtCore import QObject, Signal
 from qtpy.QtCore import Qt
-from qtpy.QtWidgets import QDockWidget, QMainWindow
+from qtpy.QtWidgets import (
+    QCheckBox,
+    QDockWidget,
+    QMainWindow,
+    QPlainTextEdit,
+    QStatusBar,
+)
 
-from microscope.core.engine import AcquisitionEngine
-from microscope.hardware.hal import HardwareAbstractionLayer
-
+from ..core.engine import AcquisitionEngine
 from .styles import STYLESHEET
+from .widgets.mda_widget import MDAWidget
+
+
+class QtLogHandler(QObject):
+    """
+    A file-like object that redirects stdout/stderr to a Qt signal.
+    """
+
+    new_text = Signal(str)
+
+    def write(self, text: str):
+        self.new_text.emit(text)
+
+    def flush(self):
+        pass
 
 
 class MainWindow(QMainWindow):
@@ -20,93 +40,91 @@ class MainWindow(QMainWindow):
     layout precisely matching the target design.
     """
 
-    def __init__(self, mmc):
+    def __init__(self, engine: AcquisitionEngine):
         super().__init__()
         self.setWindowTitle("Microscope Control")
         self.setStyleSheet(STYLESHEET)
-        self.mmc = mmc
 
-        # --- Initialize Core and Hardware Layers ---
-        self.hal = HardwareAbstractionLayer(self.mmc)
-        self.engine = AcquisitionEngine(self.hal)
+        self.engine = engine
+        self.mmc = self.engine.hal.mmc
 
-        # --- Create and Arrange Library Widgets ---
-
-        # 1. Set the ImagePreview as the central widget
         self.viewer = ImagePreview()
         self.setCentralWidget(self.viewer)
 
-        # 2. Create the MDA widget and dock it on the right
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.demo_mode_checkbox = QCheckBox("Demo Mode")
+        self.status_bar.addPermanentWidget(self.demo_mode_checkbox)
+
+        log_dock = QDockWidget("Log", self)
+        self.log_widget = QPlainTextEdit()
+        self.log_widget.setReadOnly(True)
+        log_dock.setWidget(self.log_widget)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
+
+        self._log_handler = QtLogHandler()
+        self._log_handler.new_text.connect(self.log_widget.insertPlainText)
+        sys.stdout = self._log_handler
+        # NOTE: Temporarily disabling stderr redirection to uncover hidden errors
+        # sys.stderr = self._log_handler
+
+    def setup_device_widgets(self):
+        """
+        Creates and arranges widgets that depend on a loaded config file.
+        """
+        if not self.mmc:
+            return
+
         self.mda_widget = MDAWidget()
         mda_dock = QDockWidget("Multi-D Acquisition", self)
         mda_dock.setWidget(self.mda_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, mda_dock)
 
-        # 3. Create the left-side control widgets
-        camera_widget = DefaultCameraWidget()
-        stage_widget = StageWidget()
-        # The ConfigurationWidget is used for both Objectives and Channels
-        # by pointing it to the correct group from the config file.
-        objectives_widget = ConfigurationWidget("Objective")
-        channels_widget = ConfigurationWidget("Channel")
+        camera_widget = DefaultCameraExposureWidget()
 
-        # 4. Create docks for each left-side widget
+        focus_device = self.mmc.getFocusDevice()
+        stage_widget = StageWidget(device=focus_device)
+        stage_widget.setEnabled(bool(focus_device))
+
+        # REMOVED Objective and Channel widgets
+        # objectives_widget = PresetComboBox(config_group="Objective")
+        # channels_widget = PresetComboBox(config_group="Channel")
+
         cam_dock = QDockWidget("Camera", self)
         cam_dock.setWidget(camera_widget)
-
         stage_dock = QDockWidget("Stage", self)
         stage_dock.setWidget(stage_widget)
+        # REMOVED Objective and Channel docks
+        # obj_dock = QDockWidget("Objectives", self)
+        # obj_dock.setWidget(objectives_widget)
+        # channel_dock = QDockWidget("Channels", self)
+        # channel_dock.setWidget(channels_widget)
 
-        obj_dock = QDockWidget("Objectives", self)
-        obj_dock.setWidget(objectives_widget)
-
-        channel_dock = QDockWidget("Channels", self)
-        channel_dock.setWidget(channels_widget)
-
-        # 5. Add the docks to the window, stacking them on the left
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, cam_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, stage_dock)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, obj_dock)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, channel_dock)
+        # REMOVED addDockWidget calls for Objective and Channel docks
+        # self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, obj_dock)
+        # self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, channel_dock)
 
-        # 6. Tabify the stacked dock widgets to match the target UI
+        # Corrected tabbing to only include remaining widgets
         self.tabifyDockWidget(cam_dock, stage_dock)
-        self.tabifyDockWidget(stage_dock, obj_dock)
 
-        # --- Connect our custom engine to the MDA widget ---
         self._connect_custom_engine()
+
+    def update_status(self, message: str):
+        self.status_bar.showMessage(message)
 
     def _connect_custom_engine(self):
         """Connects the MDA widget to our custom hardware-timed engine."""
-        # Disconnect the library widget's default run behavior
-        self.mda_widget.run_mda_button.clicked.disconnect()
-        # Connect the button to our custom run method
-        self.mda_widget.run_mda_button.clicked.connect(self._run_custom_mda)
+        self.mda_widget.run_acquisition_requested.connect(self.engine.run_acquisition)
+        self.mda_widget.cancel_button.clicked.connect(self.engine.cancel_acquisition)
 
-        # Connect signals from our engine back to the widget's UI slots
-        self.engine.signals.acquisition_progress.connect(self.mda_widget.mda_progress.setValue)
-        self.engine.signals.acquisition_finished.connect(self.mda_widget._on_mda_finished)
-
-    def _run_custom_mda(self):
-        """Translates the sequence from the UI widget and runs our engine."""
-        from microscope.config import AcquisitionSettings, Channel, ZStack
-
-        sequence = self.mda_widget.get_state()
-
-        settings = AcquisitionSettings()
-        if sequence.time_plan:
-            settings.num_timepoints = sequence.time_plan.loops
-            settings.timepoint_interval_s = sequence.time_plan.interval.total_seconds()
-        if sequence.z_plan:
-            settings.z_stack = ZStack(
-                start_um=sequence.z_plan.start, end_um=sequence.z_plan.top, step_um=sequence.z_plan.step
-            )
-        settings.channels = [Channel(name=ch.config, exposure_ms=ch.exposure) for ch in sequence.channels]
-
-        self.engine.run_acquisition(settings)
+        self.engine.signals.acquisition_started.connect(lambda: self.mda_widget.set_running_state(True))
+        self.engine.signals.acquisition_finished.connect(lambda: self.mda_widget.set_running_state(False))
 
     def closeEvent(self, event):
         """Ensure safe shutdown."""
         self.engine.cancel_acquisition()
-        self.mmc.reset()
+        if self.mmc and self.mmc.getLoadedDevices():
+            self.mmc.reset()
         super().closeEvent(event)

@@ -19,12 +19,15 @@ class PiezoController(Device):
     including standard positioning and advanced ASI-specific configurations.
     """
 
-    position: DeviceProperty[float] = DeviceProperty()
-
     def __init__(self, device_label: str, mmc: CMMCorePlus | None = None) -> None:
+        super().__init__()
         self._mmc = mmc or CMMCorePlus.instance()
-        super().__init__(device_label)
+        self.label = device_label
         self.asi = ASIPiezoCommands(device_label, self._mmc)
+
+        # Correctly instantiate DeviceProperty inside __init__
+        self.position: DeviceProperty = DeviceProperty("Position", self.label, self._mmc)
+
         self._mmc.events.stagePositionChanged.connect(self._on_stage_pos_changed)
 
     def _on_stage_pos_changed(self, device: str, new_pos: float) -> None:

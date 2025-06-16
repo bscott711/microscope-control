@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import Device, DeviceProperty, main_core_singleton
+from pymmcore_plus import CMMCorePlus, Device, DeviceProperty
 
 from .asi_tiger_stage import ASITigerStageCommands
 
@@ -22,18 +22,21 @@ class StageHardwareController(Device):
     attribute, providing a complete and well-structured API.
     """
 
-    position: DeviceProperty[float] = DeviceProperty()
-    step_size: DeviceProperty[float] = DeviceProperty(is_optional=True)
-
     def __init__(
         self,
         device_label: str,
         tiger_hub_label: str = "ASITiger",
         mmc: CMMCorePlus | None = None,
     ) -> None:
-        self._mmc = mmc or main_core_singleton()
-        super().__init__(device_label)
+        super().__init__()
+        self._mmc = mmc or CMMCorePlus.instance()
+        self.label = device_label
         self.asi = ASITigerStageCommands(tiger_hub_label, self._mmc)
+
+        # Correctly instantiate DeviceProperty inside __init__
+        self.position: DeviceProperty = DeviceProperty("Position", self.label, self._mmc)
+        self.step_size: DeviceProperty = DeviceProperty("StepSizeUm", self.label, self._mmc)
+
         self._mmc.events.stagePositionChanged.connect(self._on_stage_pos_changed)
 
     def _on_stage_pos_changed(self, device: str, new_pos: float) -> None:
@@ -80,18 +83,21 @@ class XYStageHardwareController:
         tiger_hub_label: str = "ASITiger",
         mmc: CMMCorePlus | None = None,
     ):
-        self._mmc = mmc or main_core_singleton()
+        self._mmc = mmc or CMMCorePlus.instance()
         self._label = device_label
         self.asi = ASITigerStageCommands(tiger_hub_label, self._mmc)
-        self._mmc.events.xyStagePositionChanged.connect(self._on_xy_pos_changed)
+        # Corrected signal name to XYStagePositionChanged (as per pymmcore-plus)
+        self._mmc.events.XYStagePositionChanged.connect(self._on_xy_pos_changed)
 
     def _on_xy_pos_changed(self, device: str, x: float, y: float):
         if device == self._label:
-            print(f"INFO: Position for '{self.label}' changed to: ({x}, {y}) µm")
+            print(f"INFO: Position for '{self._label}' changed to: ({x}, {y}) µm")
 
     def get_position(self) -> tuple[float, float]:
         """Returns the current (X, Y) position in microns."""
-        return self._mmc.getXYPosition(self._label)
+        # Explicitly cast the returned sequence to a tuple to match the type hint
+        pos = self._mmc.getXYPosition(self._label)
+        return (pos[0], pos[1])
 
     def set_position(self, x_um: float, y_um: float):
         """Moves the stage to an absolute position in microns."""

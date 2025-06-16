@@ -10,10 +10,6 @@ QMainWindow::separator {
     width: 2px;
     height: 2px;
 }
-QDockWidget {
-    titlebar-close-icon: none;
-    titlebar-float-icon: none;
-}
 QDockWidget::title {
     background-color: #444444;
     padding: 4px;

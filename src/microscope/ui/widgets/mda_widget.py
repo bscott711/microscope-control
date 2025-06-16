@@ -1,7 +1,34 @@
-from qtpy.QtCore import Signal, Slot
-from qtpy.QtWidgets import QDoubleSpinBox, QFormLayout, QGroupBox, QPushButton, QSpinBox, QVBoxLayout, QWidget
+from dataclasses import dataclass
 
-from microscope.config import AcquisitionSettings, Channel, ZStack
+from PySide6.QtCore import Signal, Slot
+from qtpy.QtWidgets import (
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
+from microscope.config import AcquisitionSettings
+
+
+@dataclass
+class Channel:
+    """A single channel configuration for an acquisition."""
+
+    name: str
+    exposure_ms: float
+
+
+@dataclass
+class ZStack:
+    """A single Z-stack configuration for an acquisition."""
+
+    start_um: float
+    end_um: float
+    step_um: float
 
 
 class MDAWidget(QWidget):
@@ -59,19 +86,22 @@ class MDAWidget(QWidget):
 
     def get_settings(self) -> AcquisitionSettings:
         """Constructs an AcquisitionSettings object from the UI fields."""
-        # For this example, we'll hardcode one channel
-        dapi_channel = Channel(name="DAPI", exposure_ms=100)
-        z_stack = ZStack(
-            start_um=self.z_start.value(),
-            end_um=self.z_end.value(),
-            step_um=self.z_step.value(),
-        )
-        return AcquisitionSettings(
-            num_timepoints=self.num_timepoints.value(),
-            timepoint_interval_s=self.timepoint_interval.value(),
-            channels=[dapi_channel],
-            z_stack=z_stack,
-        )
+        settings = AcquisitionSettings()
+
+        # Map UI fields to the settings object from config.py
+        settings.time_points = self.num_timepoints.value()
+        settings.time_interval_s = self.timepoint_interval.value()
+        settings.is_minimal_interval = self.timepoint_interval.value() == 0
+
+        settings.num_slices = int(abs(self.z_end.value() - self.z_start.value()) / self.z_step.value()) + 1
+        settings.step_size_um = self.z_step.value()
+
+        # Your config.py settings object does not have a concept of channels,
+        # but it does have laser_trig_duration_ms. We'll use a hardcoded
+        # value for now as the UI doesn't have an exposure field.
+        settings.laser_trig_duration_ms = 100.0  # ms
+
+        return settings
 
     @Slot(bool)
     def set_running_state(self, running: bool):

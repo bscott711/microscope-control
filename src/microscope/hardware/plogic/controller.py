@@ -17,7 +17,6 @@ class PLogicController:
     """
 
     def __init__(self, device_label: str = "PLogic", mmc: CMMCorePlus | None = None) -> None:
-
         self._mmc = mmc or CMMCorePlus.instance()
         self.model = PLogicCardModel()
         self._asi = ASIPLogicCommands(device_label, self._mmc)

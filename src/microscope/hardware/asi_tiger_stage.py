@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pymmcore_plus import CMMCorePlus, main_core_singleton
+from pymmcore_plus import CMMCorePlus
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -19,7 +19,7 @@ class ASITigerStageCommands:
         tiger_hub_label: str,
         mmc: CMMCorePlus | None = None,
     ) -> None:
-        self._mmc = mmc or main_core_singleton()
+        self._mmc = mmc or CMMCorePlus.instance()
         self._hub = tiger_hub_label
 
     def _send(self, command: str) -> str:

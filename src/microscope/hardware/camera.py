@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import Device, DeviceProperty, main_core_singleton
+from pymmcore_plus import CMMCorePlus, Device, DeviceProperty
 
 if TYPE_CHECKING:
     import numpy as np
-    from pymmcore_plus import CMMCorePlus
 
 
 class CameraHardwareController(Device):
@@ -19,23 +18,24 @@ class CameraHardwareController(Device):
     property management.
     """
 
-    # --- Standard Properties ---
-    exposure: DeviceProperty[float] = DeviceProperty()
-    binning: DeviceProperty[str] = DeviceProperty()
-    bit_depth: DeviceProperty[int] = DeviceProperty(read_only=True)
-    gain: DeviceProperty[int] = DeviceProperty()
-    ccd_temperature: DeviceProperty[float] = DeviceProperty(read_only=True, is_optional=True)
-    trigger_mode: DeviceProperty[str] = DeviceProperty(is_optional=True)
-    readout_rate: DeviceProperty[str] = DeviceProperty(is_optional=True)
-
     def __init__(
         self,
         device_label: str,
         mmc: CMMCorePlus | None = None,
     ) -> None:
-        self._mmc = mmc or main_core_singleton()
-        super().__init__(device_label)
-        self._mmc.setCameraDevice(self.device_label)
+        super().__init__()
+        self._mmc = mmc or CMMCorePlus.instance()
+        self.label = device_label
+
+        self.exposure: DeviceProperty = DeviceProperty("Exposure", self.label, self._mmc)
+        self.binning: DeviceProperty = DeviceProperty("Binning", self.label, self._mmc)
+        self.bit_depth: DeviceProperty = DeviceProperty("BitDepth", self.label, self._mmc)
+        self.gain: DeviceProperty = DeviceProperty("Gain", self.label, self._mmc)
+        self.ccd_temperature: DeviceProperty = DeviceProperty("CCDTemperature", self.label, self._mmc)
+        self.trigger_mode: DeviceProperty = DeviceProperty("TriggerMode", self.label, self._mmc)
+        self.readout_rate: DeviceProperty = DeviceProperty("ReadoutRate", self.label, self._mmc)
+
+        self._mmc.setCameraDevice(self.label)
         self._mmc.events.propertyChanged.connect(self._on_property_changed)
 
     def _on_property_changed(self, device: str, prop: str, value: str) -> None:
@@ -64,7 +64,9 @@ class CameraHardwareController(Device):
 
     def get_roi(self) -> tuple[int, int, int, int]:
         """Returns the current ROI as (x, y, width, height)."""
-        return self._mmc.getROI(self.label)
+        # Explicitly construct a 4-element tuple to satisfy the type checker.
+        roi_rect = self._mmc.getROI(self.label)
+        return (roi_rect[0], roi_rect[1], roi_rect[2], roi_rect[3])
 
     def clear_roi(self) -> None:
         """Resets the camera to its full frame."""

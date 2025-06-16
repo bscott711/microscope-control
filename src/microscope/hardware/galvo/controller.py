@@ -15,7 +15,6 @@ class GalvoController:
     def __init__(
         self, galvo_x_label: str, galvo_y_label: str, tiger_hub_label: str = "ASITiger", mmc: CMMCorePlus | None = None
     ) -> None:
-
         self._mmc = mmc or CMMCorePlus.instance()
         self.x_axis = galvo_x_label
         self.y_axis = galvo_y_label
