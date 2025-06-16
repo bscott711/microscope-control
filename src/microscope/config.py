@@ -1,9 +1,26 @@
 # src/microscope/config.py
 import os
 from dataclasses import dataclass
+from enum import Enum  # <--- Added import
 
 # --- Demo Mode Check ---
 USE_DEMO_CONFIG = os.environ.get("MICROSCOPE_DEMO") in ("1", "true", "True")
+
+
+# --- Added Enum for Trigger Modes ---
+class TriggerMode(str, Enum):
+    """
+    Camera trigger modes.
+    The string values must match the values expected by the camera's driver.
+    """
+
+    INTERNAL = "Internal Trigger"
+    EDGE = "Edge Trigger"
+    LEVEL = "Level Trigger"
+    LEVEL_OVERLAP = "Level Trigger Overlap"
+    TRIGGER_FIRST = "Trigger First"
+    SOFTWARE_EDGE = "Software Trigger Edge"
+    SOFTWARE_FIRST = "Software Trigger First"
 
 
 @dataclass
@@ -19,6 +36,7 @@ class AcquisitionSettings:
     piezo_center_um: float = -31.0
     laser_trig_duration_ms: float = 10.0
     delay_before_camera_ms: float = 18.0
+    trigger_mode: TriggerMode = TriggerMode.EDGE  # <--- Added trigger_mode setting
 
     # Sequence and timing settings from the GUI
     time_points: int = 1

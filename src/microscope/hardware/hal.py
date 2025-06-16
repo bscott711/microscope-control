@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from pymmcore_plus import CMMCorePlus
 
-from ..config import HW, USE_DEMO_CONFIG, AcquisitionSettings
+from ..config import HW, USE_DEMO_CONFIG, AcquisitionSettings, TriggerMode
 from .camera import CameraController
 from .galvo import GalvoController
 from .plogic import PLogicController
@@ -25,7 +25,8 @@ class HardwareAbstractionLayer:
     """
 
     def __init__(self, config_file_path: Optional[str] = None):
-        self.config_path: Optional[str] = config_file_path
+        # Use config path from HW constants if not provided
+        self.config_path: Optional[str] = config_file_path or HW.cfg_path
         self._initialize_mmc()
 
         # Compose the HAL from specialized controller components
@@ -38,7 +39,10 @@ class HardwareAbstractionLayer:
     def setup_for_acquisition(self, settings: AcquisitionSettings):
         """Prepares all hardware for a triggered acquisition sequence."""
         print("\n--- Configuring devices for acquisition (standard path) ---")
-        self.camera.set_trigger_mode("Edge Trigger")
+        # Use the trigger mode from the settings object
+        self.camera.set_trigger_mode(settings.trigger_mode)
+        print(f"Camera trigger mode set to: {settings.trigger_mode.value}")
+
         self.galvo.configure_for_scan(settings)
         self.stage.configure_for_scan(settings)
         self.plogic.program_for_acquisition(settings)
@@ -56,7 +60,7 @@ class HardwareAbstractionLayer:
         self.stage.set_idle()
         self.plogic.cleanup()
         self.stage.reset_position(settings)
-        self.camera.set_trigger_mode("Internal Trigger")
+        self.camera.set_trigger_mode(TriggerMode.INTERNAL)
 
     def run_validated_test(self, settings: AcquisitionSettings):
         """
@@ -68,7 +72,7 @@ class HardwareAbstractionLayer:
         initial_camera = mmc.getCameraDevice()
         initial_auto_shutter = mmc.getAutoShutter()
         initial_exposure = mmc.getExposure()
-        initial_trigger_mode = "Internal Trigger"
+        initial_trigger_mode = TriggerMode.INTERNAL
 
         try:
             # 1. Setup
@@ -77,7 +81,7 @@ class HardwareAbstractionLayer:
             initial_trigger_mode = self.camera.mmc.getProperty(self.camera.label, "TriggerMode")
             mmc.setAutoShutter(False)
             mmc.setConfig("Lasers", "488nm")
-            self.camera.set_trigger_mode("Edge Trigger")
+            self.camera.set_trigger_mode(TriggerMode.EDGE)
             mmc.setExposure(settings.camera_exposure_ms)
             self.galvo.configure_for_scan(settings)
             self.plogic.program_for_acquisition(settings)
@@ -105,10 +109,9 @@ class HardwareAbstractionLayer:
             if mmc.isSequenceRunning(self.camera.label):
                 mmc.stopSequenceAcquisition(self.camera.label)
 
-            # *** FIX: Set the test camera to a safe state before switching ***
-            self.camera.set_trigger_mode("Internal")  # Or whatever the default idle is
+            # Set the test camera to a safe state before switching
+            self.camera.set_trigger_mode(TriggerMode.INTERNAL)
             mmc.waitForDevice(self.camera.label)
-            # *****************************************************************
 
             self.galvo.set_idle()
             self.stage.set_idle()
