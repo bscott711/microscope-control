@@ -1,117 +1,112 @@
-from PySide6.QtCore import Signal, Slot
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QFileDialog,
-    QFormLayout,
-    QHBoxLayout,
-    QLineEdit,
-    QMainWindow,
-    QPushButton,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
+# Import all necessary pre-built widgets from the library
+from pymmcore_widgets import (
+    ConfigurationWidget,
+    ImagePreview,
+    MDAWidget,
+    StageWidget,
 )
+from qtpy.QtCore import Qt
+from qtpy.QtWidgets import QDockWidget, QMainWindow
+
+from microscope.core.engine import AcquisitionEngine
+from microscope.hardware.hal import HardwareAbstractionLayer
+
+from .styles import STYLESHEET
 
 
 class MainWindow(QMainWindow):
     """
-    The main user interface window (the View). It is responsible for
-    displaying widgets and emitting signals on user interaction.
+    The final main application window, arranged in a professional, dockable
+    layout precisely matching the target design.
     """
 
-    start_acquisition_requested = Signal(dict)
-    cancel_acquisition_requested = Signal()
-
-    def __init__(self):
+    def __init__(self, mmc):
         super().__init__()
         self.setWindowTitle("Microscope Control")
+        self.setStyleSheet(STYLESHEET)
+        self.mmc = mmc
 
-        # --- UI Elements ---
-        self.z_step_input = QLineEdit("1.0")
-        self.num_slices_input = QLineEdit("150")
-        self.exposure_input = QLineEdit("10.0")
-        self.save_dir_input = QLineEdit("./acquisition_data")
-        self.save_prefix_input = QLineEdit("ZStack")
+        # --- Initialize Core and Hardware Layers ---
+        self.hal = HardwareAbstractionLayer(self.mmc)
+        self.engine = AcquisitionEngine(self.hal)
 
-        self.browse_button = QPushButton("Browse...")
-        self.demo_mode_checkbox = QCheckBox("Run in Demo Mode")
-        self.demo_mode_checkbox.setChecked(True)
+        # --- Create and Arrange Library Widgets ---
 
-        self.start_button = QPushButton("Start Z-Stack")
-        self.cancel_button = QPushButton("Cancel Acquisition")
+        # 1. Set the ImagePreview as the central widget
+        self.viewer = ImagePreview()
+        self.setCentralWidget(self.viewer)
 
-        # FIX: Replace QLabel with a read-only QTextEdit for copy-paste
-        self.status_display = QTextEdit()
-        self.status_display.setReadOnly(True)
-        self.status_display.setMaximumHeight(80)  # Prevent it from taking too much space
-        self.status_display.setText("Status: Idle. Select a config file to load.")
+        # 2. Create the MDA widget and dock it on the right
+        self.mda_widget = MDAWidget()
+        mda_dock = QDockWidget("Multi-D Acquisition", self)
+        mda_dock.setWidget(self.mda_widget)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, mda_dock)
 
-        # --- Layout ---
-        central_widget = QWidget()
-        layout = QVBoxLayout(central_widget)
-        form_layout = QFormLayout()
+        # 3. Create the left-side control widgets
+        camera_widget = DefaultCameraWidget()
+        stage_widget = StageWidget()
+        # The ConfigurationWidget is used for both Objectives and Channels
+        # by pointing it to the correct group from the config file.
+        objectives_widget = ConfigurationWidget("Objective")
+        channels_widget = ConfigurationWidget("Channel")
 
-        dir_widget = QWidget()
-        dir_layout = QHBoxLayout(dir_widget)
-        dir_layout.setContentsMargins(0, 0, 0, 0)
-        dir_layout.addWidget(self.save_dir_input)
-        dir_layout.addWidget(self.browse_button)
+        # 4. Create docks for each left-side widget
+        cam_dock = QDockWidget("Camera", self)
+        cam_dock.setWidget(camera_widget)
 
-        form_layout.addRow("Z-Step (µm):", self.z_step_input)
-        form_layout.addRow("Number of Slices:", self.num_slices_input)
-        form_layout.addRow("Exposure (ms):", self.exposure_input)
-        form_layout.addRow("Save Directory:", dir_widget)
-        form_layout.addRow("Save Prefix:", self.save_prefix_input)
-        form_layout.addRow(self.demo_mode_checkbox)
+        stage_dock = QDockWidget("Stage", self)
+        stage_dock.setWidget(stage_widget)
 
-        layout.addLayout(form_layout)
-        layout.addWidget(self.start_button)
-        layout.addWidget(self.cancel_button)
-        layout.addWidget(self.status_display)  # Add the new QTextEdit to the layout
+        obj_dock = QDockWidget("Objectives", self)
+        obj_dock.setWidget(objectives_widget)
 
-        self.setCentralWidget(central_widget)
+        channel_dock = QDockWidget("Channels", self)
+        channel_dock.setWidget(channels_widget)
 
-        # --- Connect internal UI signals ---
-        self.start_button.clicked.connect(self._on_start_clicked)
-        self.cancel_button.clicked.connect(self.cancel_acquisition_requested)
-        self.browse_button.clicked.connect(self._on_browse_clicked)
+        # 5. Add the docks to the window, stacking them on the left
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, cam_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, stage_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, obj_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, channel_dock)
 
-    def _on_start_clicked(self):
-        """Gathers parameters and emits the request signal."""
-        params = {
-            "z_step_um": float(self.z_step_input.text()),
-            "num_slices": int(self.num_slices_input.text()),
-            "camera_exposure_ms": float(self.exposure_input.text()),
-            "laser_duration_ms": float(self.exposure_input.text()),
-            "save_dir": self.save_dir_input.text(),
-            "save_prefix": self.save_prefix_input.text(),
-            "should_save": True,
-            "galvo_card_addr": "33",
-            "galvo_axis": "A",
-            "plogic_card_addr": "36",
-            "plogic_axis_letter": "E",
-            "microns_per_degree": 100.0,
-        }
-        self.start_acquisition_requested.emit(params)
+        # 6. Tabify the stacked dock widgets to match the target UI
+        self.tabifyDockWidget(cam_dock, stage_dock)
+        self.tabifyDockWidget(stage_dock, obj_dock)
 
-    def _on_browse_clicked(self):
-        """Opens a dialog to select a save directory."""
-        dir = QFileDialog.getExistingDirectory(self, "Select Save Directory")
-        if dir:
-            self.save_dir_input.setText(dir)
+        # --- Connect our custom engine to the MDA widget ---
+        self._connect_custom_engine()
 
-    @Slot(str)
-    def update_status(self, message: str):
-        """Public slot for the Controller to update the status display."""
-        # Use setText for QTextEdit. It will correctly handle multi-line text.
-        self.status_display.setText(f"Status: {message}")
+    def _connect_custom_engine(self):
+        """Connects the MDA widget to our custom hardware-timed engine."""
+        # Disconnect the library widget's default run behavior
+        self.mda_widget.run_mda_button.clicked.disconnect()
+        # Connect the button to our custom run method
+        self.mda_widget.run_mda_button.clicked.connect(self._run_custom_mda)
 
-    @Slot()
-    def on_acquisition_started(self):
-        self.start_button.setEnabled(False)
-        self.cancel_button.setEnabled(True)
+        # Connect signals from our engine back to the widget's UI slots
+        self.engine.signals.acquisition_progress.connect(self.mda_widget.mda_progress.setValue)
+        self.engine.signals.acquisition_finished.connect(self.mda_widget._on_mda_finished)
 
-    @Slot()
-    def on_acquisition_finished(self):
-        self.start_button.setEnabled(True)
-        self.cancel_button.setEnabled(False)
+    def _run_custom_mda(self):
+        """Translates the sequence from the UI widget and runs our engine."""
+        from microscope.config import AcquisitionSettings, Channel, ZStack
+
+        sequence = self.mda_widget.get_state()
+
+        settings = AcquisitionSettings()
+        if sequence.time_plan:
+            settings.num_timepoints = sequence.time_plan.loops
+            settings.timepoint_interval_s = sequence.time_plan.interval.total_seconds()
+        if sequence.z_plan:
+            settings.z_stack = ZStack(
+                start_um=sequence.z_plan.start, end_um=sequence.z_plan.top, step_um=sequence.z_plan.step
+            )
+        settings.channels = [Channel(name=ch.config, exposure_ms=ch.exposure) for ch in sequence.channels]
+
+        self.engine.run_acquisition(settings)
+
+    def closeEvent(self, event):
+        """Ensure safe shutdown."""
+        self.engine.cancel_acquisition()
+        self.mmc.reset()
+        super().closeEvent(event)

@@ -35,6 +35,7 @@ dependencies = [
     "pillow",
     "tifffile",
     "pyserial>=3.5",
+    "pymmcore-widgets>=0.9.1",
 ]
 
 [project.optional-dependencies]

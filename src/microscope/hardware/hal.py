@@ -1,125 +1,156 @@
-from typing import Optional
+from __future__ import annotations
 
-import serial
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    TypeVar,
+    Union,
+)
+
 from pymmcore_plus import CMMCorePlus
-from pymmcore_plus.mda.handlers import OMEZarrWriter
-from useq import MDASequence
+from pymmcore_plus.core import DeviceType
 
-# Import all the dedicated hardware controllers
+# Import all our finalized high-level controllers
 from .camera import CameraHardwareController
-from .crisp import CRISPHardwareController
-from .galvo import GalvoHardwareController
-from .plogic import PLogicHardwareController
-from .stage import StageHardwareController
+from .crisp import CrispController
+from .galvo import GalvoController
+from .piezo import PiezoController
+from .plogic import PLogicController
+from .stage import StageHardwareController, XYStageHardwareController
+
+# This type alias is for static analysis and helps catch errors.
+if TYPE_CHECKING:
+    HardwareController = Union[
+        CameraHardwareController,
+        CrispController,
+        GalvoController,
+        PiezoController,
+        PLogicController,
+        StageHardwareController,
+        XYStageHardwareController,
+    ]
+
+# A TypeVar allows the return type of a function to be inferred from its inputs.
+T = TypeVar("T")
 
 
 class HardwareAbstractionLayer:
     """
-    A Facade that provides a simplified, high-level interface to the
-    complex microscope hardware subsystem. This is the primary entry point
-    into the Model for the Controller (`engine.py`).
+    Final, robust HAL that discovers all devices, stores them in a central
+    registry, and provides direct-access attributes for primary components.
     """
 
-    def __init__(self, mmc: CMMCorePlus):
+    def __init__(self, mmc: CMMCorePlus | None = None) -> None:
         self.mmc = mmc
+        self.devices: dict[str, HardwareController] = {}
+        self.scanner: GalvoController | None = None
+        self.plogic: PLogicController | None = None
+        self._discover_devices()
 
-        # The HAL instantiates and owns all hardware controllers
-        self._camera_ctrl = CameraHardwareController()
-        self._stage_ctrl = StageHardwareController()
-        self._galvo_ctrl = GalvoHardwareController()
-        self._plogic_ctrl = PLogicHardwareController()
-        self._crisp_ctrl = CRISPHardwareController()
+    # --- Convenience properties with Type-Safe Lookups ---
 
-        # This would be loaded from a user-editable config file
-        self._com_port = "COM4"
-        self._crisp_addr = "32"  # From your cfg: CRISPAFocus:Z:32
-
-        # To store the MDA writer for proper cleanup
-        self._mda_writer: Optional[OMEZarrWriter] = None
-
-    def _execute_serial_action(self, action, *args, **kwargs):
-        """Context manager for safe serial communication."""
-        try:
-            with serial.Serial(self._com_port, 115200, timeout=1) as ser:
-                return action(ser, *args, **kwargs)
-        except serial.SerialException as e:
-            raise ConnectionError(f"HAL: Failed to connect to Tiger on {self._com_port}: {e}")
-
-    def setup_and_run_z_stack(self, params: dict):
+    def _get_device_by_role[T](
+        self,
+        role_getter: Callable[[], str],
+        expected_type: type[T] | tuple[type[T], ...],
+    ) -> T | None:
         """
-        The primary high-level method for the experiment. It coordinates all
-        hardware setup and then starts the MDA.
+        A type-safe helper to get a device from the registry.
+
+        It checks if the device exists and is of the expected type, inferring
+        the return type.
         """
-        print("HAL: Coordinating hardware setup and running Z-stack...")
+        # Note: The check for `self.mmc` is now done in the calling property.
+        label = role_getter()
+        if not label:
+            return None
 
-        # 1. Configure hardware
-        self._camera_ctrl.set_trigger_mode(self.mmc, "Level Trigger Mode")
+        device = self.devices.get(label)
+        if isinstance(device, expected_type):
+            return device
+        return None
 
-        def setup_asi_hardware(ser):
-            self._galvo_ctrl.configure_for_z_stack(ser, params)
-            self._plogic_ctrl.configure_for_triggers(ser, params)
+    @property
+    def camera(self) -> CameraHardwareController | None:
+        """The default camera device currently assigned in the core."""
+        if not self.mmc:
+            return None
+        return self._get_device_by_role(self.mmc.getCameraDevice, CameraHardwareController)
 
-        self._execute_serial_action(setup_asi_hardware)
+    @property
+    def z_stage(self) -> StageHardwareController | PiezoController | None:
+        """The default focus device currently assigned in the core."""
+        if not self.mmc:
+            return None
+        # The focus device can be a Stage or a Piezo, so we check for both.
+        return self._get_device_by_role(
+            self.mmc.getFocusDevice,
+            (StageHardwareController, PiezoController),
+        )
 
-        # 2. Define the acquisition sequence
-        sequence = MDASequence(time_plan=params["num_slices"])  # type: ignore
+    @property
+    def xy_stage(self) -> XYStageHardwareController | None:
+        """The default XY stage device currently assigned in the core."""
+        if not self.mmc:
+            return None
+        return self._get_device_by_role(self.mmc.getXYStageDevice, XYStageHardwareController)
 
-        # 3. Setup the data writer, store it for cleanup, and connect events
-        self._mda_writer = OMEZarrWriter(params["save_path"], overwrite=True)
-        self.mmc.mda.events.sequenceStarted.connect(self._mda_writer.sequenceStarted)
-        self.mmc.mda.events.frameReady.connect(self._mda_writer.frameReady)
-        self.mmc.mda.events.sequenceFinished.connect(self._mda_writer.sequenceFinished)
+    @property
+    def autofocus(self) -> CrispController | None:
+        """The default autofocus device currently assigned in the core."""
+        if not self.mmc:
+            return None
+        return self._get_device_by_role(self.mmc.getAutoFocusDevice, CrispController)
 
-        print("HAL: Starting MDA engine. System is armed and waiting for triggers.")
-        self.mmc.mda.run(sequence)
-
-    def final_cleanup(self):
+    def _discover_devices(self) -> None:
         """
-        Called at the end of an acquisition to ensure a safe state and
-        disconnect event handlers to prevent memory leaks.
+        Discovers and initializes hardware controllers for all available devices.
         """
-        print("HAL: Performing final cleanup.")
-        if self._mda_writer:
-            self.mmc.mda.events.sequenceStarted.disconnect(self._mda_writer.sequenceStarted)
-            self.mmc.mda.events.frameReady.disconnect(self._mda_writer.frameReady)
-            self.mmc.mda.events.sequenceFinished.disconnect(self._mda_writer.sequenceFinished)
-            self._mda_writer = None
-            print("HAL: MDA writer disconnected.")
+        # Guard clause to fix all `reportOptionalMemberAccess` errors below.
+        if not self.mmc:
+            return
 
-    # --- Stage Control API ---
+        print("INFO: Hardware discovery started...")
+        discovered: dict[str, HardwareController] = {}
 
-    def move_stage_relative(self, axis: str, distance_um: float):
-        """Moves a stage axis by a relative amount in micrometers."""
-        self._execute_serial_action(self._stage_ctrl.move_relative, axis, distance_um)
+        tiger_hub_label = next(
+            (dev for dev in self.mmc.getLoadedDevices() if "ASITiger" in dev),
+            None,
+        )
 
-    def get_stage_position_um(self, axes: list[str]) -> dict[str, float]:
-        """Gets the current position of one or more axes in micrometers."""
-        return self._execute_serial_action(self._stage_ctrl.get_position_um, axes)
+        for label in self.mmc.getLoadedDevices():
+            dev_type = self.mmc.getDeviceType(label)
 
-    def wait_for_stage(self):
-        """Waits for all stage motion to complete."""
-        self._execute_serial_action(self._stage_ctrl.wait_for_device)
+            if dev_type == DeviceType.CameraDevice:
+                discovered[label] = CameraHardwareController(label, self.mmc)
+            elif dev_type == DeviceType.XYStageDevice and tiger_hub_label:
+                discovered[label] = XYStageHardwareController(label, tiger_hub_label, self.mmc)
+            elif dev_type == DeviceType.StageDevice:
+                if "piezo" in label.lower():
+                    discovered[label] = PiezoController(label, self.mmc)
+                elif tiger_hub_label:
+                    discovered[label] = StageHardwareController(label, tiger_hub_label, self.mmc)
+            elif dev_type == DeviceType.AutoFocusDevice:
+                discovered[label] = CrispController(label, self.mmc)
+            elif "PLogic" in self.mmc.getDeviceLibrary(label):
+                self.plogic = PLogicController(label, self.mmc)
+                discovered[label] = self.plogic
 
-    # --- CRISP Control API ---
+        galvo_labels = [
+            dev for dev in self.mmc.getLoadedDevices() if self.mmc.getDeviceType(dev) == DeviceType.GalvoDevice
+        ]
+        if len(galvo_labels) >= 2 and tiger_hub_label:
+            x_galvo = next(
+                (g for g in galvo_labels if "x" in g.lower()),
+                galvo_labels[0],
+            )
+            y_galvo = next((g for g in galvo_labels if g != x_galvo), galvo_labels[1])
+            self.scanner = GalvoController(x_galvo, y_galvo, tiger_hub_label, self.mmc)
+            discovered["Scanner"] = self.scanner
 
-    def crisp_lock(self):
-        """Engages the CRISP lock."""
-        self._execute_serial_action(self._crisp_ctrl.lock, self._crisp_addr)
-
-    def crisp_unlock(self):
-        """Disengages the CRISP lock."""
-        self._execute_serial_action(self._crisp_ctrl.unlock, self._crisp_addr)
-
-    def crisp_save_calibration(self):
-        """Saves the current CRISP calibration to the card."""
-        self._execute_serial_action(self._crisp_ctrl.save_calibration, self._crisp_addr)
-
-    # --- Camera Control API ---
-
-    def set_camera_exposure(self, exposure_ms: float):
-        """Sets the exposure time for the active camera(s)."""
-        self._camera_ctrl.set_exposure(self.mmc, exposure_ms)
-
-    def get_camera_exposure(self) -> float:
-        """Gets the current exposure time from the core."""
-        return self._camera_ctrl.get_exposure(self.mmc)
+        self.devices = discovered
+        print("=" * 20)
+        print("Hardware Discovery Complete. Initialized controllers for:")
+        for name in self.devices:
+            print(f"  - {name}")
+        print("=" * 20)

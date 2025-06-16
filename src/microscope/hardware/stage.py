@@ -1,71 +1,102 @@
-import time
+from __future__ import annotations
 
-import serial
+from typing import TYPE_CHECKING
 
-from .base import BaseHardwareController
+from pymmcore_plus import Device, DeviceProperty, main_core_singleton
+
+from .asi_tiger_stage import ASITigerStageCommands
+
+if TYPE_CHECKING:
+    from pymmcore_plus import CMMCorePlus
 
 
-class StageHardwareController(BaseHardwareController):
+class StageHardwareController(Device):
     """
-    Comprehensive hardware controller for XY and Z motor stages.
+    A final, comprehensive, event-driven stage controller.
+
+    This class handles standard stage properties (position) and actions
+    (home, stop, relative moves) by subclassing `pymmcore_plus.Device`.
+
+    All advanced, ASI-specific functionality (tuning, limits, Z-stacks, etc.)
+    is delegated to the `ASITigerStageCommands` class, available via the `.asi`
+    attribute, providing a complete and well-structured API.
     """
 
-    def __init__(self):
-        super().__init__()
+    position: DeviceProperty[float] = DeviceProperty()
+    step_size: DeviceProperty[float] = DeviceProperty(is_optional=True)
 
-    # --- Movement and Position ---
-    def move_absolute(self, ser: serial.Serial, axis: str, position_um: float):
-        """Moves a stage axis to an absolute position (in micrometers)."""
-        pos_asi_units = position_um * 10
-        self._send_command(ser, f"M {axis}={pos_asi_units:.1f}")
+    def __init__(
+        self,
+        device_label: str,
+        tiger_hub_label: str = "ASITiger",
+        mmc: CMMCorePlus | None = None,
+    ) -> None:
+        self._mmc = mmc or main_core_singleton()
+        super().__init__(device_label)
+        self.asi = ASITigerStageCommands(tiger_hub_label, self._mmc)
+        self._mmc.events.stagePositionChanged.connect(self._on_stage_pos_changed)
 
-    def move_relative(self, ser: serial.Serial, axis: str, distance_um: float):
-        """Moves a stage axis by a relative amount (in micrometers)."""
-        dist_asi_units = distance_um * 10
-        self._send_command(ser, f"R {axis}={dist_asi_units:.1f}")
+    def _on_stage_pos_changed(self, device: str, new_pos: float) -> None:
+        if device == self.label:
+            print(f"INFO: Position for '{self.label}' changed to: {new_pos} µm")
 
-    def get_position_um(self, ser: serial.Serial, axes: list[str]) -> dict:
-        """Gets the current position of one or more axes (in micrometers)."""
-        response = self._send_command(ser, f"W {' '.join(axes)}")
-        parts = response.split(" ")[1:]
-        return {axis: float(pos) / 10.0 for axis, pos in zip(axes, parts)}
+    # --- Standard Actions ---
 
-    def halt(self, ser: serial.Serial):
-        """Stops all motor movement immediately."""
-        self._send_command(ser, "HALT")
+    def stop(self) -> None:
+        """Immediately stops stage movement."""
+        self._mmc.stop(self.label)
 
-    def wait_for_device(self, ser: serial.Serial, timeout_s: float = 30.0):
-        """Waits for all stage motion to complete."""
-        start_time = time.monotonic()
-        while time.monotonic() - start_time < timeout_s:
-            if "N" in self._send_command(ser, "/"):
-                return
-            time.sleep(0.1)
-        raise TimeoutError("Timed out waiting for stage to finish moving.")
+    def home(self) -> None:
+        """Send the stage to its home position."""
+        self._mmc.home(self.label)
 
-    # --- Motion Parameters ---
-    def set_speed(self, ser: serial.Serial, axis: str, speed_mms: float):
-        """Sets the maximum speed for an axis (in mm/s)."""
-        self._send_command(ser, f"S {axis}={speed_mms:.4f}")
+    def wait_for_device(self) -> None:
+        """Wait for the device to finish any current movement."""
+        self._mmc.waitForDevice(self.label)
 
-    def get_speed(self, ser: serial.Serial, axis: str) -> float:
-        """Gets the maximum speed for an axis (in mm/s)."""
-        response = self._send_command(ser, f"S {axis}?")
-        return float(response.split("=")[1])
+    def move_relative(self, distance_um: float):
+        """Moves the stage by a relative amount in microns."""
+        self._mmc.setRelativePosition(self.label, distance_um)
 
-    def set_acceleration(self, ser: serial.Serial, axis: str, accel_ms: int):
-        """Sets the ramp time for an axis (in milliseconds)."""
-        self._send_command(ser, f"AC {axis}={accel_ms}")
+    # --- High-level wrappers for ASI commands ---
 
-    def set_backlash(self, ser: serial.Serial, axis: str, backlash_mm: float):
-        """Sets the backlash compensation for an axis (in mm)."""
-        self._send_command(ser, f"B {axis}={backlash_mm:.4f}")
+    def set_travel_limits(self, low_um: float, high_um: float):
+        """Sets the software travel limits for this stage axis."""
+        self.asi.set_travel_limits(self.label, low_um / 1000, high_um / 1000)
+        print(f"INFO: Travel limits for '{self.label}' set to ({low_um}, {high_um}) µm.")
 
-    # --- Coordinate System ---
-    def set_origin(self, ser: serial.Serial, axis: str):
-        """Sets the current position of an axis as the new origin (0)."""
-        self._send_command(ser, f"H {axis}=0")
+    def set_current_position_as_zero(self):
+        """Define the current position as the new zero origin."""
+        self.asi.set_current_position_as_zero(self.label)
+        print(f"INFO: New zero position for '{self.label}' set.")
 
-    def zero_all_axes(self, ser: serial.Serial):
-        """Sets the current position of all axes to be the origin."""
-        self._send_command(ser, "Z")
+
+class XYStageHardwareController:
+    """A high-level controller for a 2-axis XY stage."""
+
+    def __init__(
+        self,
+        device_label: str,
+        tiger_hub_label: str = "ASITiger",
+        mmc: CMMCorePlus | None = None,
+    ):
+        self._mmc = mmc or main_core_singleton()
+        self._label = device_label
+        self.asi = ASITigerStageCommands(tiger_hub_label, self._mmc)
+        self._mmc.events.xyStagePositionChanged.connect(self._on_xy_pos_changed)
+
+    def _on_xy_pos_changed(self, device: str, x: float, y: float):
+        if device == self._label:
+            print(f"INFO: Position for '{self.label}' changed to: ({x}, {y}) µm")
+
+    def get_position(self) -> tuple[float, float]:
+        """Returns the current (X, Y) position in microns."""
+        return self._mmc.getXYPosition(self._label)
+
+    def set_position(self, x_um: float, y_um: float):
+        """Moves the stage to an absolute position in microns."""
+        self._mmc.setXYPosition(self._label, x_um, y_um)
+
+    def move_relative(self, dx_um: float, dy_um: float):
+        """Moves the stage by a relative amount in microns."""
+        self._mmc.setRelativeXYPosition(self._label, dx_um, dy_um)

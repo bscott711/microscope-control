@@ -1,63 +1,105 @@
-import serial
+from __future__ import annotations
 
-from .base import BaseHardwareController
+import time
+from typing import TYPE_CHECKING
+
+from pymmcore_plus import CMMCorePlus, main_core_singleton
+
+from .asi_crisp import ASICrispCommands, CrispState
+
+if TYPE_CHECKING:
+    from pymmcore_plus import CMMCorePlus
 
 
-class CRISPHardwareController(BaseHardwareController):
-    """Comprehensive hardware controller for the CRISP autofocus system."""
+class CrispController:
+    """
+    A final, high-level, state-aware controller for the ASI CRISP system.
 
-    def __init__(self):
-        super().__init__()
+    This class provides a clean, Pythonic interface to control CRISP. It
+    exposes key parameters as properties and delegates all low-level serial
+    command communication to the specialized `ASICrispCommands` class,
+    which is available via the `.asi` attribute.
+    """
 
-    def lock(self, ser: serial.Serial, crisp_addr: str):
-        self._send_command(ser, f"{crisp_addr}LK")
+    def __init__(
+        self,
+        device_label: str = "CRISP",
+        mmc: CMMCorePlus | None = None,
+    ) -> None:
+        self._mmc = mmc or main_core_singleton()
+        self.asi = ASICrispCommands(device_label, self._mmc)
 
-    def unlock(self, ser: serial.Serial, crisp_addr: str):
-        self._send_command(ser, f"{crisp_addr}UL")
+    # --- Read-only State Properties ---
+    @property
+    def state(self) -> CrispState:
+        """The current state of the CRISP system as a `CrispState` enum."""
+        return self.asi.get_state()
 
-    def get_state(self, ser: serial.Serial, crisp_addr: str) -> dict:
-        response = self._send_command(ser, f"{crisp_addr}LK?")
-        parts = response.split(" ")[-1].split(",")
-        state_char = parts[0]
-        state_map = {"R": "Ready", "L": "Locked", "F": "In Focus", "E": "Error"}
-        return {
-            "lock_state": state_map.get(state_char, f"Unknown ({state_char})"),
-            "error_number": int(parts[1]) if len(parts) > 1 else 0,
-        }
+    @property
+    def is_locked(self) -> bool:
+        """True if CRISP is in the 'In Lock' state."""
+        return self.state == CrispState.In_Lock
 
-    def calibrate_log_amp(self, ser: serial.Serial, crisp_addr: str):
-        self._send_command(ser, f"{crisp_addr}CAL R=1")
+    @property
+    def snr(self) -> float:
+        """The current Signal-to-Noise Ratio (SNR) / error number."""
+        return self.asi.get_snr()
 
-    def calibrate_dither(self, ser: serial.Serial, crisp_addr: str):
-        self._send_command(ser, f"{crisp_addr}CAL R=2")
+    # --- Read/Write Configuration Properties ---
+    @property
+    def loop_gain(self) -> int:
+        """The controller's feedback loop gain."""
+        return self.asi.get_gain()
 
-    def set_gain_and_calibrate(self, ser: serial.Serial, crisp_addr: str):
-        self._send_command(ser, f"{crisp_addr}CAL R=3")
+    @loop_gain.setter
+    def loop_gain(self, value: int):
+        self.asi.set_gain(value)
 
-    def set_gain(self, ser: serial.Serial, crisp_addr: str, gain: int):
-        if not 1 <= gain <= 10:
-            raise ValueError("Gain must be between 1 and 10.")
-        self._send_command(ser, f"{crisp_addr}GA X={gain}")
+    @property
+    def led_intensity(self) -> int:
+        """The intensity of the CRISP LED."""
+        return self.asi.get_led_intensity()
 
-    def set_loop_parameters(self, ser: serial.Serial, crisp_addr: str, p: int, i: int):
-        self._send_command(ser, f"{crisp_addr}LP X={p} Y={i}")
+    @led_intensity.setter
+    def led_intensity(self, value: int):
+        self.asi.set_led_intensity(value)
 
-    def get_loop_parameters(self, ser: serial.Serial, crisp_addr: str) -> dict:
-        response = self._send_command(ser, f"{crisp_addr}LP X? Y?")
-        parts = response.split(" ")[1:]
-        params = {p.split("=")[0]: int(p.split("=")[1]) for p in parts}
-        return {"P": params.get("X"), "I": params.get("Y")}
+    @property
+    def lock_range(self) -> float:
+        """The focus lock range in microns."""
+        return self.asi.get_lock_range()
 
-    def reset_focus_offset(self, ser: serial.Serial, crisp_addr: str):
-        self._send_command(ser, f"{crisp_addr}LR Y=2")
+    @lock_range.setter
+    def lock_range(self, value: float):
+        self.asi.set_lock_range(value)
 
-    def get_snr(self, ser: serial.Serial, crisp_addr: str) -> float:
-        response = self._send_command(ser, f"{crisp_addr}SN?")
-        return float(response.split(" ")[-1])
+    # --- High-Level Actions ---
+    def lock(self, wait: bool = True, timeout_s: int = 10) -> bool:
+        """Attempts to lock focus, optionally waiting for confirmation."""
+        if self.is_locked:
+            return True
+        self.asi.lock()
+        if not wait:
+            return True
+        start_time = time.time()
+        while time.time() - start_time < timeout_s:
+            if self.is_locked:
+                return True
+            time.sleep(0.1)
+        return False
 
-    def get_sum(self, ser: serial.Serial, crisp_addr: str) -> int:
-        response = self._send_command(ser, f"{crisp_addr}SUM?")
-        return int(response.split(" ")[-1])
+    def unlock(self):
+        self.asi.unlock()
 
-    def save_calibration(self, ser: serial.Serial, crisp_addr: str):
-        self._send_command(ser, f"{crisp_addr}SS Z")
+    def calibrate(self):
+        """Runs the full 3-step CRISP calibration routine."""
+        print("Starting CRISP calibration...")
+        self.unlock()
+        time.sleep(0.5)
+        self.asi.calibrate_log_amp()
+        time.sleep(2)
+        self.asi.dither()
+        time.sleep(2)
+        self.asi.calibrate_gain()
+        time.sleep(2)
+        print("Calibration complete.")
