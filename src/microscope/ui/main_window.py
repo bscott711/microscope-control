@@ -37,7 +37,7 @@ class QtLogHandler(QObject):
 
 class MainWindow(QMainWindow):
     """
-    The main application window, updated to work with the new engine.
+    The main application window.
     """
 
     def __init__(self, engine: AcquisitionEngine):
@@ -54,10 +54,10 @@ class MainWindow(QMainWindow):
         self._create_dock_widgets()
         self._connect_signals()
 
-        self.log_handler = QtLogHandler()
-        self.log_handler.new_text.connect(self.log_widget.appendPlainText)
-        sys.stdout = self.log_handler
-        sys.stderr = self.log_handler
+        # Note: The actual redirection of stdout/stderr is now handled
+        # in the __main__.py file to catch early messages.
+        if isinstance(sys.stdout, QtLogHandler):
+            sys.stdout.new_text.connect(self.log_widget.appendPlainText)
 
     def _create_dock_widgets(self):
         """Create and arrange all dockable widgets."""
@@ -84,11 +84,10 @@ class MainWindow(QMainWindow):
         if not self.mmc:
             return
 
-        # Correctly initialize the camera widget
+        camera_device = self.mmc.getCameraDevice()
         camera_widget = DefaultCameraExposureWidget(mmcore=self.mmc)
-        camera_widget.setEnabled(bool(self.mmc.getCameraDevice()))
+        camera_widget.setEnabled(bool(camera_device))
 
-        # Correctly initialize the stage widget
         focus_device = self.mmc.getFocusDevice()
         stage_widget = StageWidget(device=focus_device)
         stage_widget.setEnabled(bool(focus_device))
@@ -120,7 +119,11 @@ class MainWindow(QMainWindow):
 
     def _on_engine_state_changed(self, state: AcquisitionState):
         """Updates the UI based on the engine's state."""
-        self.update_status(f"Status: {state.name}")
+        # --- Fix: Print the message to send it to the log widget ---
+        message = f"Status: {state.name}"
+        print(message)  # This will be redirected to the log
+        self.update_status(message)  # This will update the status bar
+
         if state in (AcquisitionState.ACQUIRING, AcquisitionState.PREPARING):
             self.mda_widget.set_running_state(True)
         else:
