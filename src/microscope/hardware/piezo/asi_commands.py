@@ -1,31 +1,28 @@
+# hardware/piezo/asi_commands.py
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..common import BaseASICommands
 from .models import PiezoMaintainMode, PiezoMode
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
 
 
-class ASIPiezoCommands:
+class ASIPiezoCommands(BaseASICommands):
     """LOW-LEVEL: Provides a complete interface for all custom ASI Piezo commands."""
 
-    def __init__(self, piezo_device_label: str, mmc: CMMCorePlus) -> None:
-        self._mmc = mmc
-        self._label = piezo_device_label
+    def __init__(self, mmc: CMMCorePlus, command_device_label: str = "PIEZO") -> None:
         # Piezo commands are sent directly to the Piezo device axis
-        self._send_target = self._label
+        super().__init__(mmc, command_device_label)
+        self._port = self._mmc.getProperty(self._command_device, "Port")
 
     def _send(self, command: str) -> str:
         """Sends a command to the Piezo device."""
-        full_command = f"{self._send_target} {command}"
-        port = self._mmc.getSerialPortName(self._label)
-        self._mmc.setSerialPortCommand(port, full_command, "\r")
-        response = self._mmc.getSerialPortAnswer(port, "\r")
-        if ":N" in response:
-            raise RuntimeError(f"ASI Piezo command failed: '{command}' -> {response}")
-        return response
+        full_command = f"{self._command_device} {command}"
+        self._mmc.setSerialPortCommand(self._port, full_command, "\r")
+        return self._mmc.getSerialPortAnswer(self._port, "\r")
 
     def get_operating_mode(self) -> PiezoMode:
         """Gets the current operating mode (PZ Z? command)."""

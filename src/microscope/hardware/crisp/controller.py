@@ -1,3 +1,4 @@
+# hardware/crisp/controller.py
 from __future__ import annotations
 
 import time
@@ -5,7 +6,8 @@ from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus
 
-from .asi_crisp import ASICrispCommands, CrispState
+from .asi_commands import ASICrispCommands
+from .models import CrispState
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -27,7 +29,7 @@ class CrispController:
         mmc: CMMCorePlus | None = None,
     ) -> None:
         self._mmc = mmc or CMMCorePlus.instance()
-        self.asi = ASICrispCommands(device_label, self._mmc)
+        self.asi = ASICrispCommands(self._mmc, device_label)
 
     # --- Read-only State Properties ---
     @property

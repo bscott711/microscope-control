@@ -1,11 +1,7 @@
+# hardware/hal.py
 from __future__ import annotations
 
-from typing import (
-    TYPE_CHECKING,
-    Callable,
-    TypeVar,
-    Union,
-)
+from typing import TYPE_CHECKING, Callable, TypeVar, Union
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.core import DeviceType
@@ -49,7 +45,7 @@ class HardwareAbstractionLayer:
 
     # --- Convenience properties with Type-Safe Lookups ---
 
-    def _get_device_by_role[T](
+    def _get_device_by_role(
         self,
         role_getter: Callable[[], str],
         expected_type: type[T] | tuple[type[T], ...],
@@ -60,7 +56,8 @@ class HardwareAbstractionLayer:
         It checks if the device exists and is of the expected type, inferring
         the return type.
         """
-        # Note: The check for `self.mmc` is now done in the calling property.
+        if not self.mmc:
+            return None
         label = role_getter()
         if not label:
             return None
@@ -82,7 +79,6 @@ class HardwareAbstractionLayer:
         """The default focus device currently assigned in the core."""
         if not self.mmc:
             return None
-        # The focus device can be a Stage or a Piezo, so we check for both.
         return self._get_device_by_role(
             self.mmc.getFocusDevice,
             (StageHardwareController, PiezoController),
@@ -106,7 +102,6 @@ class HardwareAbstractionLayer:
         """
         Discovers and initializes hardware controllers for all available devices.
         """
-        # Guard clause to fix all `reportOptionalMemberAccess` errors below.
         if not self.mmc:
             return
 

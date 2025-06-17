@@ -1,14 +1,16 @@
+# hardware/plogic/asi_commands.py
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from ..common import BaseASICommands
 from .models import PLogicCardModel
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
 
 
-class ASIPLogicCommands:
+class ASIPLogicCommands(BaseASICommands):
     """LOW-LEVEL: Translates a PLogicCardModel into ASI serial commands."""
 
     _ADDR_MAP: ClassVar[dict[str, tuple[int, int]]] = {
@@ -21,16 +23,15 @@ class ASIPLogicCommands:
         **{f"TTL_OUTPUT_SOURCE_{i}": (134, i) for i in range(1, 9)},
     }
 
-    def __init__(self, plogic_device_label: str, mmc: CMMCorePlus) -> None:
-        self._mmc = mmc
-        self._label = plogic_device_label
+    def __init__(self, mmc: CMMCorePlus, command_device_label: str = "PLogic") -> None:
+        super().__init__(mmc, command_device_label)
+        self._port = self._mmc.getProperty(self._command_device, "Port")
 
-    def _send(self, command: str):
-        full_command = f"{self._label} {command}"
-        self._mmc.setSerialPortCommand(self._mmc.getSerialPortName(self._label), full_command, "\r")
-        response = self._mmc.getSerialPortAnswer(self._mmc.getSerialPortName(self._label), "\r")
-        if ":N" in response:
-            raise RuntimeError(f"ASI command failed: '{command}' -> {response}")
+    def _send(self, command: str) -> str:
+        """Sends a command to the PLogic device."""
+        full_command = f"{self._command_device} {command}"
+        self._mmc.setSerialPortCommand(self._port, full_command, "\r")
+        return self._mmc.getSerialPortAnswer(self._port, "\r")
 
     def _set_address(self, addr_x: int, addr_y: int = 0):
         self._send(f"M X={addr_x} Y={addr_y}")
@@ -66,3 +67,12 @@ class ASIPLogicCommands:
             self._write_value(port.direction.value)
             self._set_address(*self._ADDR_MAP[f"TTL_OUTPUT_SOURCE_{ttl_idx}"])
             self._write_value(port.output_source.value)
+
+    def read_model_from_card(self) -> PLogicCardModel:
+        """Reads the current state of the hardware into a PLogicCardModel."""
+        # This is a placeholder for the implementation that reads from the hardware
+        raise NotImplementedError("Reading from PLogic card is not yet implemented.")
+
+    def load_preset(self, preset_num: int) -> None:
+        """Loads a hardware preset."""
+        self._send(f"CCA X={preset_num}")

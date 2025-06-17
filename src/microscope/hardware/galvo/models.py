@@ -1,3 +1,4 @@
+# hardware/galvo/models.py
 from __future__ import annotations
 
 from enum import IntEnum

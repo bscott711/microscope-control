@@ -1,33 +1,16 @@
+# hardware/crisp/asi_commands.py
 from __future__ import annotations
 
-from enum import IntEnum
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import CMMCorePlus
+from ..common import ASIException, BaseASICommands
+from .models import CrispState
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
 
 
-class CrispState(IntEnum):
-    """An enumeration of the possible states of the CRISP system."""
-
-    Idle = 3
-    Log_Amp_Cal = 4
-    Dithering = 5
-    Gain_Cal = 6
-    Ready = 7
-    In_Focus = 8
-    Focal_Plane_Found = 9
-    Monitoring = 10
-    Focusing = 11
-    In_Lock = 12
-    Focus_Lost_Recently = 13
-    Out_Of_Focus = 14
-    Focus_Lost = 15
-
-
-class ASICrispCommands:
+class ASICrispCommands(BaseASICommands):
     """
     LOW-LEVEL: Provides a complete, Pythonic interface for all custom
     ASI CRISP autofocus serial commands.
@@ -35,18 +18,26 @@ class ASICrispCommands:
 
     def __init__(
         self,
-        crisp_device_label: str,
-        mmc: CMMCorePlus | None = None,
+        mmc: CMMCorePlus,
+        command_device_label: str = "CRISP",
     ) -> None:
-        self._mmc = mmc or CMMCorePlus.instance()
-        self._label = crisp_device_label
+        # Note: CRISP commands are sent directly to the CRISP device, not the hub
+        super().__init__(mmc, command_device_label)
+        self._port = self._mmc.getProperty(self._command_device, "Port")
 
-    def _send(self, command: str, with_dev_label: bool = True) -> str:
+    def _send(self, command: str) -> str:
         """Send a command to the CRISP device and get the response."""
-        full_command = f"{self._label} {command}" if with_dev_label else command
-        port = self._mmc.getProperty(self._label, "Port")
-        self._mmc.setSerialPortCommand(port, full_command, "\r")
-        return self._mmc.getSerialPortAnswer(port, "\r")
+        full_command = f"{self._command_device} {command}"
+        self._mmc.setSerialPortCommand(self._port, full_command, "\r")
+        response = self._mmc.getSerialPortAnswer(self._port, "\r")
+
+        # Check if the response indicates an error
+        if response.startswith(":N"):
+            # Extract the specific error code (e.g., ":N-1") from the response
+            error_code = response.split(" ")[0]
+            # Now, raise the exception with the correct arguments
+            raise ASIException(code=error_code, command=command)
+        return response
 
     def _query_param(self, param: str) -> str:
         """Helper to query a parameter using 'LK [param]?' syntax."""

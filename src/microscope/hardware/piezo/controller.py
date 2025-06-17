@@ -1,3 +1,4 @@
+# hardware/piezo/controller.py
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -23,7 +24,7 @@ class PiezoController(Device):
         super().__init__()
         self._mmc = mmc or CMMCorePlus.instance()
         self.label = device_label
-        self.asi = ASIPiezoCommands(device_label, self._mmc)
+        self.asi = ASIPiezoCommands(self._mmc, self.label)
 
         # Correctly instantiate DeviceProperty inside __init__
         self.position: DeviceProperty = DeviceProperty("Position", self.label, self._mmc)

@@ -1,14 +1,15 @@
+# hardware/stage/asi_commands.py
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from pymmcore_plus import CMMCorePlus
+from ..common import BaseASICommands
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
 
 
-class ASITigerStageCommands:
+class ASITigerStageCommands(BaseASICommands):
     """
     LOW-LEVEL: Provides a complete, Pythonic interface for all custom
     ASI Tiger stage commands, including tuning, limits, and advanced modules.
@@ -16,25 +17,10 @@ class ASITigerStageCommands:
 
     def __init__(
         self,
-        tiger_hub_label: str,
-        mmc: CMMCorePlus | None = None,
+        mmc: CMMCorePlus,
+        command_device_label: str = "ASITiger",
     ) -> None:
-        self._mmc = mmc or CMMCorePlus.instance()
-        self._hub = tiger_hub_label
-
-    def _send(self, command: str) -> str:
-        """Send a command to the Tiger hub and get the response."""
-        self._mmc.setProperty(self._hub, "SerialCommand", command)
-        response = self._mmc.getProperty(self._hub, "SerialResponse")
-        if ":N" in response:
-            raise RuntimeError(f"ASI command failed: '{command}' -> {response}")
-        return response
-
-    def _get_axis_value(self, command: str, axis: str) -> str:
-        """Query an axis-specific value and parse it."""
-        response = self._send(f"{command} {axis}?")
-        # Expected format is ":A [value]"
-        return response.split(" ")[-1].strip()
+        super().__init__(mmc, command_device_label)
 
     # --- Motion Tuning ---
 
@@ -71,7 +57,7 @@ class ASITigerStageCommands:
         self._send("RM X=0")
 
     def load_ring_buffer_position(self, **kwargs: float):
-        pos_str = " ".join([f"{ax}={pos * 10}" for ax, pos in kwargs.items()])
+        pos_str = " ".join([f"{ax}={pos * 10000}" for ax, pos in kwargs.items()])
         self._send(f"LD {pos_str}")
 
     def enable_ring_buffer_ttl(self, mode: Literal[1, 2, 3]):

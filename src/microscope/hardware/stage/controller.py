@@ -1,10 +1,11 @@
+# hardware/stage/controller.py
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from pymmcore_plus import CMMCorePlus, Device, DeviceProperty
 
-from .asi_tiger_stage import ASITigerStageCommands
+from .asi_commands import ASITigerStageCommands
 
 if TYPE_CHECKING:
     from pymmcore_plus import CMMCorePlus
@@ -31,7 +32,7 @@ class StageHardwareController(Device):
         super().__init__()
         self._mmc = mmc or CMMCorePlus.instance()
         self.label = device_label
-        self.asi = ASITigerStageCommands(tiger_hub_label, self._mmc)
+        self.asi = ASITigerStageCommands(self._mmc, tiger_hub_label)
 
         # Correctly instantiate DeviceProperty inside __init__
         self.position: DeviceProperty = DeviceProperty("Position", self.label, self._mmc)
@@ -85,8 +86,7 @@ class XYStageHardwareController:
     ):
         self._mmc = mmc or CMMCorePlus.instance()
         self._label = device_label
-        self.asi = ASITigerStageCommands(tiger_hub_label, self._mmc)
-        # Corrected signal name to XYStagePositionChanged (as per pymmcore-plus)
+        self.asi = ASITigerStageCommands(self._mmc, tiger_hub_label)
         self._mmc.events.XYStagePositionChanged.connect(self._on_xy_pos_changed)
 
     def _on_xy_pos_changed(self, device: str, x: float, y: float):
@@ -95,7 +95,6 @@ class XYStageHardwareController:
 
     def get_position(self) -> tuple[float, float]:
         """Returns the current (X, Y) position in microns."""
-        # Explicitly cast the returned sequence to a tuple to match the type hint
         pos = self._mmc.getXYPosition(self._label)
         return (pos[0], pos[1])
 

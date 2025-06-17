@@ -112,4 +112,3 @@ class ViewerWidget(QWidget):
             )
         except Exception as e:
             print(f"Error displaying image: {e}")
-
