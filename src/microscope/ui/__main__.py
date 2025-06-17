@@ -5,11 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-# Import your application components after
 from pymmcore_plus import CMMCorePlus
-
-# No need to set environment variables, as the test script proved it's not needed.
-# Import Qt and superqt first
 from PySide6.QtCore import QtMsgType, qInstallMessageHandler
 from qtpy.QtWidgets import QApplication
 from superqt import QIconifyIcon
@@ -17,7 +13,9 @@ from superqt import QIconifyIcon
 from microscope.config import HardwareConstants
 from microscope.hardware.engine import AcquisitionEngine
 from microscope.hardware.hal import HardwareAbstractionLayer
-from microscope.ui.main_window import MainWindow, QtLogHandler
+
+# FIX: Removed unused QtLogHandler from import
+from microscope.ui.main_window import MainWindow
 
 
 def qt_message_handler(mode: QtMsgType, context, message: str):
@@ -37,13 +35,12 @@ def qt_message_handler(mode: QtMsgType, context, message: str):
 def main():
     """Main application entry point."""
     qInstallMessageHandler(qt_message_handler)
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s")
+    logging.basicConfig(
+        stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s"
+    )
 
     app = QApplication(sys.argv)
 
-    # FIX: "Prime" the icon system before initializing anything else.
-    # This forces the 'mdi' plugin to load early and without interference.
-    # We don't need to do anything with the icon; just creating it is enough.
     try:
         _ = QIconifyIcon("mdi:home")
         print("INFO: Icon system initialized successfully.")
@@ -59,15 +56,15 @@ def main():
     engine = AcquisitionEngine(hal=hal, hw_constants=hw_constants)
     win = MainWindow(engine)
 
-    log_handler = QtLogHandler()
-    sys.stdout = log_handler
-    sys.stderr = log_handler
-    log_handler.new_text.connect(win.log_widget.appendPlainText)
+    # FIX: The QtLogHandler and stdout redirection are no longer needed,
+    # as the CoreLogWidget in MainWindow handles this automatically.
 
     win.show()
 
     try:
-        config_name = "demo.cfg" if os.getenv("MICROSCOPE_DEMO") else "20250523-OPM.cfg"
+        config_name = (
+            "demo.cfg" if os.getenv("MICROSCOPE_DEMO") else "20250523-OPM.cfg"
+        )
         print(f"INFO: Loading configuration: {config_name}")
 
         config_path = Path(__file__).parent.parent.parent.parent / "hardware_profiles"
@@ -80,7 +77,8 @@ def main():
         hal._discover_devices()
 
         print("INFO: Setting up device-specific widgets...")
-        win.setup_device_widgets()
+        # FIX: Renamed method to match the new name in MainWindow
+        win._setup_hardware_widgets()
         print("INFO: Initialization complete.")
 
     except Exception as e:

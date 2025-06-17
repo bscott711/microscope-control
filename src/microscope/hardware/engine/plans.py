@@ -47,8 +47,10 @@ class GalvoPLogicMDA(AcquisitionPlan):
     ):
         """Configures PLogic, Galvo, and Camera for the MDA."""
         # Use individual checks to help the type checker narrow the types
-        if not hal.camera or not hal.scanner or not hal.plogic:
-            raise RuntimeError("Required hardware (Camera, Scanner, PLogic) not found.")
+        if not hal.camera or not hal.scanner or not hal.plogic or not settings.z_stack:
+            raise RuntimeError(
+                "Required hardware (Camera, Scanner, PLogic) and Z-stack settings not found."
+            )
 
         print("INFO: Configuring hardware with GalvoPLogicMDA plan...")
 
@@ -56,23 +58,28 @@ class GalvoPLogicMDA(AcquisitionPlan):
         hal.plogic.configure_for_mda(settings)
 
         # 2. Configure camera exposure by assigning to the .value attribute
-        hal.camera.exposure.value = settings.camera_exposure_ms
+        hal.camera.set_exposure(settings.camera_exposure_ms)
 
         # 3. Configure Galvo scan pattern
-        x_amplitude_mv = hw_constants.sheet_width_deg * hw_constants.slice_calibration_slope_um_per_deg
-        y_amplitude_mv = settings.num_slices * settings.step_size_um
+        # FIX: Correctly access z_stack parameters and derive piezo center
+        x_amplitude_mv = (
+            hw_constants.sheet_width_deg
+            * hw_constants.slice_calibration_slope_um_per_deg
+        )
+        y_amplitude_mv = settings.num_slices * settings.z_stack.step_um
+        piezo_center_um = (settings.z_stack.start_um + settings.z_stack.end_um) / 2
 
         hal.scanner.setup_raster_scan(
             x_amplitude_mv=x_amplitude_mv,
             y_amplitude_mv=y_amplitude_mv,
             scan_rate_hz=1 / (hw_constants.line_scan_duration_ms / 1000),
             num_lines=settings.num_slices,
-            offset_mv=(hw_constants.sheet_offset_deg, settings.piezo_center_um),
+            offset_mv=(hw_constants.sheet_offset_deg, piezo_center_um),
         )
 
         # 4. Prepare camera for sequence acquisition
         total_frames = settings.num_slices * settings.time_points
-        hal.camera.start_sequence_acquisition(num_images=total_frames)
+        hal.camera.device.startSequenceAcquisition(total_frames, 0, True)
 
         # 5. Start the galvo scan
         hal.scanner.start()
@@ -82,5 +89,5 @@ class GalvoPLogicMDA(AcquisitionPlan):
         if hal.scanner:
             hal.scanner.stop()
         if hal.camera:
-            hal.camera.stop_sequence_acquisition()
+            hal.camera.device.stopSequenceAcquisition()
         print("INFO: Hardware cleanup complete.")

@@ -26,29 +26,29 @@ class CameraHardwareController:
         device = self._mmc.getDeviceObject(device_label)
 
         if not isinstance(device, CameraDevice):
-            raise TypeError(f"Device {device_label!r} is not a CameraDevice, but a {type(device).__name__}")
+            raise TypeError(
+                f"Device {device_label!r} is not a CameraDevice, "
+                f"but a {type(device).__name__}"
+            )
         self.device = device
         self.label = self.device.label
 
     def pop_from_buffer(self) -> np.ndarray | None:
         """Pops and returns the next image from the circular buffer, if available."""
+        # FIX: These methods must be called on the core CMMCorePlus object.
         if self._mmc.getRemainingImageCount() > 0:
-            # FIX: This method is called on the core object.
             return self._mmc.popNextImage()
         return None
 
     def get_exposure(self) -> float:
         """Returns the current exposure time in milliseconds."""
-        # FIX: This method is called on the core object, as it applies
-        # to the currently active camera.
         return self._mmc.getExposure()
 
     def set_exposure(self, value: float):
         """Sets the exposure time in milliseconds."""
-        # FIX: This method is called on the core object.
         self._mmc.setExposure(value)
 
     def snap(self) -> np.ndarray:
         """Snap and return an image."""
-        # FIX: This is a convenience method on the CMMCorePlus object.
+        # FIX: snap() is a convenience method on the core CMMCorePlus object.
         return self._mmc.snap()

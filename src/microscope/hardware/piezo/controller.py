@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-# FIX: Use absolute imports to avoid path resolution issues.
-from pymmcore_plus.core._device import StageDevice
+# FIX: Use absolute imports from the public API to avoid path resolution issues.
+from pymmcore_plus.core import StageDevice
 
 from microscope.hardware.piezo.asi_commands import ASIPiezoCommands
 from microscope.hardware.piezo.models import PiezoInfo
@@ -25,7 +25,10 @@ class PiezoController:
         device = self._mmc.getDeviceObject(device_label)
 
         if not isinstance(device, StageDevice):
-            raise TypeError(f"Device {device_label!r} is not a StageDevice, but a {type(device).__name__}")
+            raise TypeError(
+                f"Device {device_label!r} is not a StageDevice, "
+                f"but a {type(device).__name__}"
+            )
         self.device = device
         self.label = self.device.label
         self._asi = ASIPiezoCommands(mmc=self._mmc, command_device_label=self.label)

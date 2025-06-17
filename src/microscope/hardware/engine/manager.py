@@ -1,4 +1,4 @@
-# hardware/engine/manager.py
+# src/microscope/hardware/engine/manager.py
 from __future__ import annotations
 
 import time
@@ -53,17 +53,31 @@ class AcquisitionWorker(QRunnable):
 
             # 2. ACQUISITION
             self._set_state(AcquisitionState.ACQUIRING)
+
             total_frames = self.settings.num_slices * self.settings.time_points
-            frames_collected = 0
-            while frames_collected < total_frames and not self._cancelled:
-                # Correctly call getRemainingImageCount on the mmc object
-                if self.hal.camera and self.hal.camera._mmc.getRemainingImageCount() > 0:
-                    image = self.hal.camera.pop_from_buffer()
-                    if image is not None:
-                        self.signals.frame_acquired.emit(image, {})
-                        frames_collected += 1
+            frames_acquired = 0
+            while frames_acquired < total_frames and not self._cancelled:
+                # Ensure camera is present on each loop iteration
+                if not self.hal.camera:
+                    self.signals.acquisition_error.emit(
+                        "Acquisition aborted: Camera not available."
+                    )
+                    break
+
+                # pop_from_buffer safely handles checking for available images.
+                image = self.hal.camera.pop_from_buffer()
+                if image is not None:
+                    self.signals.frame_acquired.emit(image, {})
+                    frames_acquired += 1
                 else:
-                    time.sleep(0.005)  # Small sleep to prevent busy-waiting
+                    # FIX: Add a defensive check for self.hal.mmc to satisfy Pylance.
+                    if self.hal.mmc and not self.hal.mmc.isSequenceRunning():
+                        print(
+                            "WARN: Camera sequence stopped before all frames were acquired."
+                        )
+                        break
+                    # If the sequence is still running, wait a moment for the next frame.
+                    time.sleep(0.005)
 
             if self._cancelled:
                 self._set_state(AcquisitionState.CANCELLED)
@@ -73,6 +87,9 @@ class AcquisitionWorker(QRunnable):
         except Exception as e:
             self._set_state(AcquisitionState.ERROR)
             self.signals.acquisition_error.emit(str(e))
+            import traceback
+
+            traceback.print_exc()
         finally:
             # 3. CLEANUP
             self._set_state(AcquisitionState.CLEANING_UP)
@@ -116,7 +133,9 @@ class AcquisitionEngine(QObject):
         # Connect worker signals to the engine's public signals
         self.worker.signals.state_changed.connect(self.signals.state_changed)
         self.worker.signals.frame_acquired.connect(self.signals.frame_acquired)
-        self.worker.signals.acquisition_finished.connect(self.signals.acquisition_finished)
+        self.worker.signals.acquisition_finished.connect(
+            self.signals.acquisition_finished
+        )
         self.worker.signals.acquisition_error.connect(self.signals.acquisition_error)
         self.thread_pool.start(self.worker)
 
