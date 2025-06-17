@@ -1,81 +1,94 @@
+# src/microscope/ui/__main__.py
+
+import logging
+import os
 import sys
 from pathlib import Path
 
-# These are safe to import here as they are standard libraries
-# and have no side effects like printing to the console.
+# Import your application components after
 from pymmcore_plus import CMMCorePlus
+
+# No need to set environment variables, as the test script proved it's not needed.
+# Import Qt and superqt first
+from PySide6.QtCore import QtMsgType, qInstallMessageHandler
 from qtpy.QtWidgets import QApplication
+from superqt import QIconifyIcon
 
-# We import MainWindow and the LogHandler from the sub-module.
-# Note: At this point, no actual code from these modules has been run.
-from .main_window import MainWindow, QtLogHandler
+from microscope.config import HardwareConstants
+from microscope.hardware.engine import AcquisitionEngine
+from microscope.hardware.hal import HardwareAbstractionLayer
+from microscope.ui.main_window import MainWindow, QtLogHandler
 
 
-def find_project_root() -> Path:
-    """Find the project root by searching upwards for `pyproject.toml`."""
-    current_path = Path(__file__).resolve()
-    for parent in current_path.parents:
-        if (parent / "pyproject.toml").is_file():
-            return parent
-    raise FileNotFoundError("Could not find project root containing 'pyproject.toml'.")
+def qt_message_handler(mode: QtMsgType, context, message: str):
+    """Redirect Qt log messages to the Python logging module."""
+    levels = {
+        QtMsgType.QtDebugMsg: logging.DEBUG,
+        QtMsgType.QtInfoMsg: logging.INFO,
+        QtMsgType.QtWarningMsg: logging.WARNING,
+        QtMsgType.QtCriticalMsg: logging.CRITICAL,
+        QtMsgType.QtFatalMsg: logging.FATAL,
+    }
+    level = levels.get(mode, logging.INFO)
+    logger = logging.getLogger("Qt")
+    logger.log(level, message)
 
 
 def main():
-    """Main function to run the application."""
-    app = QApplication(sys.argv)
-    project_root = find_project_root()
+    """Main application entry point."""
+    qInstallMessageHandler(qt_message_handler)
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s")
 
-    # --- Fix 1: Redirect stdout/stderr BEFORE creating the engine ---
-    # Create the log handler instance directly.
+    app = QApplication(sys.argv)
+
+    # FIX: "Prime" the icon system before initializing anything else.
+    # This forces the 'mdi' plugin to load early and without interference.
+    # We don't need to do anything with the icon; just creating it is enough.
+    try:
+        _ = QIconifyIcon("mdi:home")
+        print("INFO: Icon system initialized successfully.")
+    except Exception as e:
+        print(f"WARNING: Could not prime icon system: {e}")
+
+    # Now proceed with the rest of the application setup
+    mmc = CMMCorePlus.instance()
+    mmc.unloadAllDevices()
+
+    hal = HardwareAbstractionLayer(mmc)
+    hw_constants = HardwareConstants()
+    engine = AcquisitionEngine(hal=hal, hw_constants=hw_constants)
+    win = MainWindow(engine)
+
     log_handler = QtLogHandler()
     sys.stdout = log_handler
     sys.stderr = log_handler
+    log_handler.new_text.connect(win.log_widget.appendPlainText)
 
-    # --- Now, perform the rest of the imports and initialization ---
-    # This import will now correctly print its "demo mode" message to the log handler.
-    from ..config import hw_constants
-    from ..hardware.engine import AcquisitionEngine
-    from ..hardware.hal import HardwareAbstractionLayer
+    win.show()
 
-    # 1. Create the core objects
-    mmc = CMMCorePlus.instance()
-    hal = HardwareAbstractionLayer(mmc)
-    engine = AcquisitionEngine(hal=hal, hw_constants=hw_constants)
+    try:
+        config_name = "demo.cfg" if os.getenv("MICROSCOPE_DEMO") else "20250523-OPM.cfg"
+        print(f"INFO: Loading configuration: {config_name}")
 
-    # 2. Create the main window and connect the log handler's signal
-    view = MainWindow(engine=engine)
-    log_handler.new_text.connect(view.log_widget.appendPlainText)
+        config_path = Path(__file__).parent.parent.parent.parent / "hardware_profiles"
+        config_file = config_path / config_name
 
-    # 3. Handle Demo Mode vs. Real Hardware
-    def load_config():
-        is_demo = view.demo_mode_checkbox.isChecked()
-        config_file = "hardware_profiles/demo.cfg" if is_demo else hw_constants.cfg_path
+        mmc.unloadAllDevices()
+        mmc.loadSystemConfiguration(str(config_file))
 
-        # The path construction remains as you specified.
-        config_path = project_root / config_file
+        print("INFO: Discovering hardware devices...")
+        hal._discover_devices()
 
-        view.update_status(f"Loading config: {config_file}...")
-        if config_path.exists():
-            try:
-                mmc.loadSystemConfiguration(str(config_path))
-                view.update_status("Ready.")
-                view.setup_device_widgets()
-                view.mda_widget.run_button.setEnabled(True)
-            except Exception as e:
-                # This will now catch errors from within the config file itself
-                view.update_status(f"Error loading {config_file}: {e}")
-                if hasattr(view, "mda_widget"):
-                    view.mda_widget.run_button.setEnabled(False)
-        else:
-            # --- Fix 2: Improved error message ---
-            # This provides better debugging information if the path fails.
-            msg = f"Config file not found! Searched at: {config_path}. (Project root detected at: {project_root})"
-            view.update_status(msg)
+        print("INFO: Setting up device-specific widgets...")
+        win.setup_device_widgets()
+        print("INFO: Initialization complete.")
 
-    view.demo_mode_checkbox.stateChanged.connect(load_config)
-    load_config()
+    except Exception as e:
+        print(f"FATAL: Could not initialize microscope. Error: {e}")
+        import traceback
 
-    view.show()
+        traceback.print_exc()
+
     sys.exit(app.exec())
 
 

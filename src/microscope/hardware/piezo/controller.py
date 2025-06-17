@@ -1,65 +1,61 @@
-# hardware/piezo/controller.py
+# src/microscope/hardware/piezo/controller.py
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pymmcore_plus import CMMCorePlus, Device, DeviceProperty
+# FIX: Use absolute imports to avoid path resolution issues.
+from pymmcore_plus.core._device import StageDevice
 
-from .asi_commands import ASIPiezoCommands
-from .models import PiezoMode
+from microscope.hardware.piezo.asi_commands import ASIPiezoCommands
+from microscope.hardware.piezo.models import PiezoInfo
 
 if TYPE_CHECKING:
-    from .models import PiezoMaintainMode
+    from pymmcore_plus import CMMCorePlus
 
 
-class PiezoController(Device):
+class PiezoController:
     """
-    A final, comprehensive controller for an ASI Piezo stage.
-
-    This class provides a high-level API for all major Piezo functions,
-    including standard positioning and advanced ASI-specific configurations.
+    A high-level controller for a piezo device.
     """
 
-    def __init__(self, device_label: str, mmc: CMMCorePlus | None = None) -> None:
-        super().__init__()
-        self._mmc = mmc or CMMCorePlus.instance()
-        self.label = device_label
-        self.asi = ASIPiezoCommands(self._mmc, self.label)
+    device: StageDevice
 
-        # Correctly instantiate DeviceProperty inside __init__
-        self.position: DeviceProperty = DeviceProperty("Position", self.label, self._mmc)
+    def __init__(self, device_label: str, mmc: CMMCorePlus):
+        self._mmc = mmc
+        device = self._mmc.getDeviceObject(device_label)
 
-        self._mmc.events.stagePositionChanged.connect(self._on_stage_pos_changed)
+        if not isinstance(device, StageDevice):
+            raise TypeError(f"Device {device_label!r} is not a StageDevice, but a {type(device).__name__}")
+        self.device = device
+        self.label = self.device.label
+        self._asi = ASIPiezoCommands(mmc=self._mmc, command_device_label=self.label)
 
-    def _on_stage_pos_changed(self, device: str, new_pos: float) -> None:
-        if device == self.label:
-            print(f"INFO: Position for Piezo '{self.label}' changed to: {new_pos} µm")
+    def get_info(self) -> PiezoInfo:
+        """
+        Gets status info from the piezo, parses it, and returns a PiezoInfo object.
+        """
+        # This implementation assumes the _asi object has methods to get status.
+        # Since ASIPiezoCommands does not have a `get_info` method,
+        # we must build the PiezoInfo object from other available methods.
+        current_pos = self.get_position()
+        # NOTE: The following are placeholders as min/max limits are not
+        # directly available via a simple command in the provided asi_commands.
+        # This would need to be expanded based on other properties or commands.
+        axis = "P"  # Assuming 'P' for a piezo stage
+        limit_min = 0.0
+        limit_max = 100.0
 
-    @property
-    def operating_mode(self) -> PiezoMode:
-        """The current operating mode of the Piezo (e.g., closed loop)."""
-        return self.asi.get_operating_mode()
+        return PiezoInfo(
+            axis=axis,
+            limit_min=limit_min,
+            limit_max=limit_max,
+            current_pos=current_pos,
+        )
 
-    @operating_mode.setter
-    def operating_mode(self, mode: PiezoMode):
-        self.asi.set_operating_mode(mode)
+    def get_position(self) -> float:
+        """Returns the current position of the piezo stage in microns."""
+        return self._mmc.getPosition(self.label)
 
-    @property
-    def maintain_mode(self) -> PiezoMaintainMode:
-        """The maintain mode, controlling overshoot algorithms."""
-        return self.asi.get_maintain_mode()
-
-    @maintain_mode.setter
-    def maintain_mode(self, mode: PiezoMaintainMode):
-        self.asi.set_maintain_mode(mode)
-
-    def run_calibration(self):
-        """Runs the Piezo's auto-calibration routine."""
-        print(f"INFO: Starting calibration for Piezo '{self.label}'...")
-        self.asi.run_calibration()
-        self._mmc.waitForDevice(self.label)
-        print("INFO: Piezo calibration complete.")
-
-    def wait_for_device(self):
-        """Waits for the Piezo to finish any current movement."""
-        self._mmc.waitForDevice(self.label)
+    def set_position(self, position: float):
+        """Sets the position of the piezo stage in microns."""
+        self._mmc.setPosition(self.label, position)

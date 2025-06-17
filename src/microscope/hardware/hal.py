@@ -16,6 +16,8 @@ from .stage import StageHardwareController, XYStageHardwareController
 
 # This type alias is for static analysis and helps catch errors.
 if TYPE_CHECKING:
+    from pymmcore_plus import CMMCorePlus  # Redundant import, can be removed
+
     HardwareController = Union[
         CameraHardwareController,
         CrispController,
@@ -41,7 +43,10 @@ class HardwareAbstractionLayer:
         self.devices: dict[str, HardwareController] = {}
         self.scanner: GalvoController | None = None
         self.plogic: PLogicController | None = None
-        self._discover_devices()
+        # FIX: Do not run discovery on initialization.
+        # This will now be called explicitly from __main__ after the
+        # hardware config is loaded.
+        # self._discover_devices()
 
     # --- Convenience properties with Type-Safe Lookups ---
 

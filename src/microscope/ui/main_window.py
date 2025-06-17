@@ -54,8 +54,6 @@ class MainWindow(QMainWindow):
         self._create_dock_widgets()
         self._connect_signals()
 
-        # Note: The actual redirection of stdout/stderr is now handled
-        # in the __main__.py file to catch early messages.
         if isinstance(sys.stdout, QtLogHandler):
             sys.stdout.new_text.connect(self.log_widget.appendPlainText)
 
@@ -115,19 +113,27 @@ class MainWindow(QMainWindow):
 
         self.engine.signals.state_changed.connect(self._on_engine_state_changed)
         self.engine.signals.frame_acquired.connect(self.viewer.on_new_frame)
-        self.engine.signals.acquisition_error.connect(lambda msg: self.update_status(f"ERROR: {msg}"))
+        # FIX: Connect the acquisition_error signal to our new dedicated slot.
+        self.engine.signals.acquisition_error.connect(self._on_acquisition_error)
 
     def _on_engine_state_changed(self, state: AcquisitionState):
         """Updates the UI based on the engine's state."""
-        # --- Fix: Print the message to send it to the log widget ---
         message = f"Status: {state.name}"
-        print(message)  # This will be redirected to the log
-        self.update_status(message)  # This will update the status bar
+        print(message)  # This will be redirected to the log widget
+        self.update_status(message)
 
         if state in (AcquisitionState.ACQUIRING, AcquisitionState.PREPARING):
             self.mda_widget.set_running_state(True)
         else:
             self.mda_widget.set_running_state(False)
+
+    # NEW: Dedicated slot for handling and routing error messages.
+    @Slot(str)
+    def _on_acquisition_error(self, message: str):
+        """Displays an error message in the log and status bar."""
+        error_message = f"ERROR: {message}"
+        print(error_message)  # Redirect to the log widget
+        self.update_status(error_message)  # Show in status bar
 
     def update_status(self, message: str):
         self.status_bar.showMessage(message)
