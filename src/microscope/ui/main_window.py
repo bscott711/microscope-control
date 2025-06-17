@@ -1,11 +1,11 @@
+# src/microscope/ui/main_window.py
 import sys
 
 from pymmcore_widgets import (
     DefaultCameraExposureWidget,
-    ImagePreview,
     StageWidget,
 )
-from PySide6.QtCore import QObject, Signal  # Corrected import for Signal
+from PySide6.QtCore import QObject, Signal, Slot
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -15,15 +15,16 @@ from qtpy.QtWidgets import (
     QStatusBar,
 )
 
-from ..core.engine import AcquisitionEngine
+from microscope.config import AcquisitionSettings
+from microscope.hardware.engine import AcquisitionEngine, AcquisitionState, GalvoPLogicMDA
+
 from .styles import STYLESHEET
 from .widgets.mda_widget import MDAWidget
+from .widgets.viewer_widget import ViewerWidget
 
 
 class QtLogHandler(QObject):
-    """
-    A file-like object that redirects stdout/stderr to a Qt signal.
-    """
+    """Redirects stdout/stderr to a Qt signal."""
 
     new_text = Signal(str)
 
@@ -36,8 +37,7 @@ class QtLogHandler(QObject):
 
 class MainWindow(QMainWindow):
     """
-    The final main application window, arranged in a professional, dockable
-    layout precisely matching the target design.
+    The main application window, updated to work with the new engine.
     """
 
     def __init__(self, engine: AcquisitionEngine):
@@ -48,71 +48,83 @@ class MainWindow(QMainWindow):
         self.engine = engine
         self.mmc = self.engine.hal.mmc
 
-        self.viewer = ImagePreview()
+        self.viewer = ViewerWidget()
         self.setCentralWidget(self.viewer)
 
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-        self.demo_mode_checkbox = QCheckBox("Demo Mode")
-        self.status_bar.addPermanentWidget(self.demo_mode_checkbox)
+        self._create_dock_widgets()
+        self._connect_signals()
 
-        log_dock = QDockWidget("Log", self)
-        self.log_widget = QPlainTextEdit()
-        self.log_widget.setReadOnly(True)
-        log_dock.setWidget(self.log_widget)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
+        self.log_handler = QtLogHandler()
+        self.log_handler.new_text.connect(self.log_widget.appendPlainText)
+        sys.stdout = self.log_handler
+        sys.stderr = self.log_handler
 
-        self._log_handler = QtLogHandler()
-        self._log_handler.new_text.connect(self.log_widget.insertPlainText)
-        sys.stdout = self._log_handler
-        # NOTE: Temporarily disabling stderr redirection to uncover hidden errors
-        # sys.stderr = self._log_handler
-
-    def setup_device_widgets(self):
-        """
-        Creates and arranges widgets that depend on a loaded config file.
-        """
-        if not self.mmc:
-            return
-
+    def _create_dock_widgets(self):
+        """Create and arrange all dockable widgets."""
         self.mda_widget = MDAWidget()
-        mda_dock = QDockWidget("Multi-D Acquisition", self)
+        mda_dock = QDockWidget("Acquisition", self)
         mda_dock.setWidget(self.mda_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, mda_dock)
 
-        camera_widget = DefaultCameraExposureWidget()
+        self.log_widget = QPlainTextEdit()
+        self.log_widget.setReadOnly(True)
+        log_dock = QDockWidget("Log", self)
+        log_dock.setWidget(self.log_widget)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
 
+        self.demo_mode_checkbox = QCheckBox("Demo Mode")
+        self.demo_mode_checkbox.setChecked(True)
+
+        self.status_bar = QStatusBar()
+        self.status_bar.addPermanentWidget(self.demo_mode_checkbox)
+        self.setStatusBar(self.status_bar)
+
+    def setup_device_widgets(self):
+        """Create device-specific widgets after config is loaded."""
+        if not self.mmc:
+            return
+
+        # Correctly initialize the camera widget
+        camera_widget = DefaultCameraExposureWidget(mmcore=self.mmc)
+        camera_widget.setEnabled(bool(self.mmc.getCameraDevice()))
+
+        # Correctly initialize the stage widget
         focus_device = self.mmc.getFocusDevice()
         stage_widget = StageWidget(device=focus_device)
         stage_widget.setEnabled(bool(focus_device))
 
         cam_dock = QDockWidget("Camera", self)
         cam_dock.setWidget(camera_widget)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, cam_dock)
+
         stage_dock = QDockWidget("Stage", self)
         stage_dock.setWidget(stage_widget)
-
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, cam_dock)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, stage_dock)
 
-        # Corrected tabbing to only include remaining widgets
         self.tabifyDockWidget(cam_dock, stage_dock)
 
-        self._connect_custom_engine()
+    @Slot(AcquisitionSettings)
+    def _on_run_acquisition(self, settings: AcquisitionSettings):
+        """Creates an acquisition plan and starts the engine."""
+        plan = GalvoPLogicMDA()
+        self.engine.run_acquisition(plan, settings)
+
+    def _connect_signals(self):
+        """Connect all signals between the UI and the engine."""
+        self.mda_widget.run_acquisition_requested.connect(self._on_run_acquisition)
+        self.mda_widget.cancel_button.clicked.connect(self.engine.cancel_acquisition)
+
+        self.engine.signals.state_changed.connect(self._on_engine_state_changed)
+        self.engine.signals.frame_acquired.connect(self.viewer.on_new_frame)
+        self.engine.signals.acquisition_error.connect(lambda msg: self.update_status(f"ERROR: {msg}"))
+
+    def _on_engine_state_changed(self, state: AcquisitionState):
+        """Updates the UI based on the engine's state."""
+        self.update_status(f"Status: {state.name}")
+        if state in (AcquisitionState.ACQUIRING, AcquisitionState.PREPARING):
+            self.mda_widget.set_running_state(True)
+        else:
+            self.mda_widget.set_running_state(False)
 
     def update_status(self, message: str):
         self.status_bar.showMessage(message)
-
-    def _connect_custom_engine(self):
-        """Connects the MDA widget to our custom hardware-timed engine."""
-        self.mda_widget.run_acquisition_requested.connect(self.engine.run_acquisition)
-        self.mda_widget.cancel_button.clicked.connect(self.engine.cancel_acquisition)
-
-        self.engine.signals.acquisition_started.connect(lambda: self.mda_widget.set_running_state(True))
-        self.engine.signals.acquisition_finished.connect(lambda: self.mda_widget.set_running_state(False))
-
-    def closeEvent(self, event):
-        """Ensure safe shutdown."""
-        self.engine.cancel_acquisition()
-        if self.mmc and self.mmc.getLoadedDevices():
-            self.mmc.reset()
-        super().closeEvent(event)

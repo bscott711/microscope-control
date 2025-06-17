@@ -1,8 +1,7 @@
-from dataclasses import dataclass
+# src/microscope/ui/widgets/mda_widget.py
 from typing import Optional
 
-# Correct Qt import
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import Signal
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QFormLayout,
@@ -11,105 +10,56 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from superqt import QLabeledDoubleSlider, QLabeledSlider
 
-# Superqt widgets
-from superqt import QCollapsible, QLabeledDoubleSlider, QLabeledSlider
-
-# Import your config class
-from microscope.config import AcquisitionSettings
-
-
-@dataclass
-class Channel:
-    """A single channel configuration for an acquisition."""
-
-    name: str
-    exposure_ms: float
-
-
-@dataclass
-class ZStack:
-    """A single Z-stack configuration for an acquisition."""
-
-    start_um: float
-    end_um: float
-    step_um: float
+from microscope.config import AcquisitionSettings, Channel, ZStack
 
 
 class MDAWidget(QWidget):
     """
     Widget to configure and run a Multi-Dimensional Acquisition.
-    Uses QLabeledSlider/QDoubleSlider from superqt for better UI layout.
+    This has been updated to use the centralized AcquisitionSettings from config.py.
     """
 
     run_acquisition_requested = Signal(AcquisitionSettings)
-    acquisition_canceled = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
 
         # --- Timepoints Group ---
-        time_group_content = QGroupBox("Timepoints")
-        time_layout = QFormLayout()
-
+        time_group = QGroupBox("Timepoints")
+        time_layout = QFormLayout(time_group)
         self.num_timepoints = QLabeledSlider(Qt.Orientation.Horizontal)
-        self.num_timepoints.setTextLabel("Number:")
-        self.num_timepoints.setRange(1, 1000)
-        self.num_timepoints.setValue(10)
-
+        self.num_timepoints.setRange(1, 100)
         self.timepoint_interval = QLabeledDoubleSlider(Qt.Orientation.Horizontal)
-        self.timepoint_interval.setTextLabel("Interval:")
-        self.timepoint_interval.setRange(0.0, 3600.0)
-        self.timepoint_interval.setValue(1.0)
-        self.timepoint_interval.setSuffix(" s")
-
-        time_layout.addRow(self.num_timepoints)
-        time_layout.addRow(self.timepoint_interval)
-        time_group_content.setLayout(time_layout)
-
-        self.time_collapsible = QCollapsible("Timepoints Settings")
-        self.time_collapsible.setContent(time_group_content)
-        self.time_collapsible.collapse(False)  # Use setChecked instead of setExpanded
+        self.timepoint_interval.setRange(0, 60)
+        time_layout.addRow("Number:", self.num_timepoints)
+        time_layout.addRow("Interval (s):", self.timepoint_interval)
 
         # --- Z-Stack Group ---
-        z_group_content = QGroupBox("Z-Stack")
-        z_layout = QFormLayout()
-
+        z_group = QGroupBox("Z-Stack")
+        z_layout = QFormLayout(z_group)
         self.z_start = QLabeledDoubleSlider(Qt.Orientation.Horizontal)
-        self.z_start.setTextLabel("Start (µm):")
-        self.z_start.setRange(-1000.0, 1000.0)
-        self.z_start.setValue(0.0)
-
+        self.z_start.setRange(-50, 50)
         self.z_end = QLabeledDoubleSlider(Qt.Orientation.Horizontal)
-        self.z_end.setTextLabel("End (µm):")
-        self.z_end.setRange(-1000.0, 1000.0)
-        self.z_end.setValue(10.0)
-
+        self.z_end.setRange(-50, 50)
         self.z_step = QLabeledDoubleSlider(Qt.Orientation.Horizontal)
-        self.z_step.setTextLabel("Step (µm):")
-        self.z_step.setRange(0.1, 100.0)
+        self.z_step.setRange(0.1, 5)
         self.z_step.setValue(1.0)
+        z_layout.addRow("Start (µm):", self.z_start)
+        z_layout.addRow("End (µm):", self.z_end)
+        z_layout.addRow("Step (µm):", self.z_step)
 
-        z_layout.addRow(self.z_start)
-        z_layout.addRow(self.z_end)
-        z_layout.addRow(self.z_step)
-        z_group_content.setLayout(z_layout)
-
-        self.z_collapsible = QCollapsible("Z-Stack Settings")
-        self.z_collapsible.setContent(z_group_content)
-        self.z_collapsible.collapse(False)
-
-        # --- Control Buttons ---
+        # --- Run/Cancel Buttons ---
         self.run_button = QPushButton("Run Acquisition")
         self.run_button.clicked.connect(self._on_run_clicked)
-
         self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self._on_cancel_clicked)
 
+        # --- Main Layout ---
         main_layout = QVBoxLayout(self)
-        main_layout.addWidget(self.time_collapsible)
-        main_layout.addWidget(self.z_collapsible)
+        main_layout.addWidget(time_group)
+        main_layout.addWidget(z_group)
         main_layout.addStretch()
         main_layout.addWidget(self.run_button)
         main_layout.addWidget(self.cancel_button)
@@ -118,27 +68,34 @@ class MDAWidget(QWidget):
         settings = self.get_settings()
         self.run_acquisition_requested.emit(settings)
 
-    def _on_cancel_clicked(self):
-        self.acquisition_canceled.emit()
-
     def get_settings(self) -> AcquisitionSettings:
-        settings = AcquisitionSettings()
+        """Constructs the AcquisitionSettings object from the UI fields."""
+        # Create a ZStack object if the step size is greater than 0
+        z_stack = None
+        if self.z_step.value() > 0:
+            z_stack = ZStack(
+                start_um=self.z_start.value(),
+                end_um=self.z_end.value(),
+                step_um=self.z_step.value(),
+            )
 
-        settings.time_points = self.num_timepoints.value()
-        settings.time_interval_s = self.timepoint_interval.value()
-        settings.is_minimal_interval = settings.time_interval_s == 0
+        # NOTE: Channels are hardcoded for now as there's no UI for them.
+        # This could be expanded with a channel table or list widget.
+        channels = [Channel(name="488nm", exposure_ms=10.0)]
 
-        z_range = abs(self.z_end.value() - self.z_start.value())
-        step = self.z_step.value()
-        settings.num_slices = int(round(z_range / step)) + 1 if step > 0 else 1
-        settings.step_size_um = step
+        return AcquisitionSettings(
+            channels=channels,
+            z_stack=z_stack,
+            time_points=self.num_timepoints.value(),
+            time_interval_s=self.timepoint_interval.value(),
+        )
 
-        # Hardcoded as per original logic
-        settings.laser_trig_duration_ms = 100.0
-
-        return settings
-
-    @Slot(bool)
-    def set_running_state(self, running: bool):
-        self.run_button.setEnabled(not running)
-        self.cancel_button.setEnabled(running)
+    def set_running_state(self, is_running: bool):
+        """Disables UI elements when an acquisition is running."""
+        self.run_button.setEnabled(not is_running)
+        self.cancel_button.setEnabled(is_running)
+        self.z_start.setEnabled(not is_running)
+        self.z_end.setEnabled(not is_running)
+        self.z_step.setEnabled(not is_running)
+        self.num_timepoints.setEnabled(not is_running)
+        self.timepoint_interval.setEnabled(not is_running)

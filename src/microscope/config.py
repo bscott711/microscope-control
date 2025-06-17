@@ -1,44 +1,72 @@
 # src/microscope/config.py
 import os
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Optional
 
 # --- Demo Mode Check ---
 USE_DEMO_CONFIG = os.environ.get("MICROSCOPE_DEMO") in ("1", "true", "True")
+
+
+# --- Core Data Structures ---
+# These are now the primary data models for acquisition settings.
+
+
+@dataclass
+class Channel:
+    """A single channel configuration for an acquisition."""
+
+    name: str
+    exposure_ms: float
+
+
+@dataclass
+class ZStack:
+    """A single Z-stack configuration for an acquisition."""
+
+    start_um: float
+    end_um: float
+    step_um: float
+
+    @property
+    def num_slices(self) -> int:
+        """Derived number of slices in the Z-stack."""
+        if self.step_um == 0:
+            return 1
+        return int(round(abs(self.end_um - self.start_um) / self.step_um)) + 1
 
 
 @dataclass
 class AcquisitionSettings:
     """
     Stores all user-configurable acquisition parameters.
-    This dataclass now includes all settings from the GUI to ensure type consistency.
+    This dataclass is the single source of truth for an experiment's settings.
     """
 
-    # Hardware-related settings
-    num_slices: int = 3
-    step_size_um: float = 1.0
-    piezo_center_um: float = -31.0
-    laser_trig_duration_ms: float = 10.0
-    delay_before_camera_ms: float = 18.0
-
-    # Sequence and timing settings from the GUI
+    # Core sequence settings
+    channels: Sequence[Channel] = field(default_factory=list)
+    z_stack: Optional[ZStack] = None
     time_points: int = 1
     time_interval_s: float = 0.0
-    is_minimal_interval: bool = True
 
-    # Data saving settings from the GUI
+    # Data saving settings
     should_save: bool = False
     save_dir: str = ""
     save_prefix: str = "acquisition"
 
+    # Hardware timing parameters derived from the core settings
     @property
     def camera_exposure_ms(self) -> float:
         """Derived camera exposure time."""
-        return self.laser_trig_duration_ms + 1.95
+        # This could be more complex, e.g., finding max exposure in channels
+        if self.channels:
+            return self.channels[0].exposure_ms + 1.95
+        return 10.0  # Default exposure if no channels are set
 
     @property
-    def delay_before_laser_ms(self) -> float:
-        """Derived laser delay time."""
-        return self.delay_before_camera_ms + 1.25
+    def num_slices(self) -> int:
+        """Derived number of slices."""
+        return self.z_stack.num_slices if self.z_stack else 1
 
 
 @dataclass
@@ -82,7 +110,8 @@ class HardwareConstants:
     camera_mode_is_overlap: bool = False
 
 
-# Instantiate constants
-HW = HardwareConstants()
+# Instantiate constants with the corrected name for consistency
+hw_constants = HardwareConstants()
+
 if USE_DEMO_CONFIG:
     print("...RUNNING IN DEMO MODE...")
