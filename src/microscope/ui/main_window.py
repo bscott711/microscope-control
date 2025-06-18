@@ -82,13 +82,15 @@ class MainWindow(QMainWindow):
         self.mmc: CMMCorePlus = engine.hal.mmc
 
         # -- Set Central Widget --
-        self.viewer = ImagePreview()
+        # FIX: Pass the shared mmcore instance to the viewer.
+        self.viewer = ImagePreview(mmcore=self.mmc)
         self.setCentralWidget(self.viewer)
 
         # -- Create and Arrange Dock Widgets --
 
         # Left Dock: MDA Controls
-        self.mda_widget = CustomMDAWidget()
+        # FIX: Pass the shared mmcore instance to the MDA widget.
+        self.mda_widget = CustomMDAWidget(mmcore=self.mmc)
         mda_dock = QDockWidget("MDA", self)
         mda_dock.setWidget(self.mda_widget)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, mda_dock)
@@ -100,7 +102,8 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, hw_dock)
 
         # Bottom Dock: Core Log
-        self.log_widget = CoreLogWidget()
+        # FIX: Pass the shared mmcore instance to the log widget.
+        self.log_widget = CoreLogWidget(mmcore=self.mmc)
         log_dock = QDockWidget("Log", self)
         log_dock.setWidget(self.log_widget)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
@@ -111,10 +114,11 @@ class MainWindow(QMainWindow):
         live_tab = QWidget()
         live_layout = QGridLayout(live_tab)
         live_layout.setContentsMargins(10, 10, 10, 10)
-        live_layout.addWidget(SnapButton(), 0, 0)
-        live_layout.addWidget(LiveButton(), 0, 1)
-        live_layout.addWidget(DefaultCameraExposureWidget(), 1, 0, 1, 2)
-        live_layout.addWidget(ChannelWidget(), 2, 0, 1, 2)
+        # FIX: Pass the shared mmcore instance to all live control widgets.
+        live_layout.addWidget(SnapButton(mmcore=self.mmc), 0, 0)
+        live_layout.addWidget(LiveButton(mmcore=self.mmc), 0, 1)
+        live_layout.addWidget(DefaultCameraExposureWidget(mmcore=self.mmc), 1, 0, 1, 2)
+        live_layout.addWidget(ChannelWidget(mmcore=self.mmc), 2, 0, 1, 2)
         live_layout.setRowStretch(3, 1)  # Pushes widgets to the top
         hw_tabs.addTab(live_tab, "Live")
 
@@ -125,11 +129,15 @@ class MainWindow(QMainWindow):
         try:
             stage_device_label = self.mmc.getXYStageDevice()
             if stage_device_label:
-                stage_layout.addWidget(StageWidget(device=stage_device_label))
+                # FIX: Pass the shared mmcore instance to the stage widget.
+                stage_layout.addWidget(
+                    StageWidget(device=stage_device_label, mmcore=self.mmc)
+                )
         except Exception as e:
             print(f"WARNING: Could not create stage widget: {e}")
         try:
-            stage_layout.addWidget(ObjectivesWidget())
+            # FIX: Pass the shared mmcore instance to the objectives widget.
+            stage_layout.addWidget(ObjectivesWidget(mmcore=self.mmc))
         except Exception as e:
             print(f"WARNING: Could not create objectives widget: {e}")
         stage_layout.addStretch()  # Pushes widgets to the top
@@ -153,17 +161,24 @@ class MainWindow(QMainWindow):
         settings = self._convert_sequence_to_settings(sequence)
         self.engine.run_acquisition(GalvoPLogicMDA(), settings)
 
-    def _convert_sequence_to_settings(self, sequence: useq.MDASequence) -> AcquisitionSettings:
+    def _convert_sequence_to_settings(
+        self, sequence: useq.MDASequence
+    ) -> AcquisitionSettings:
         """Robustly converts a useq.MDASequence to the engine's AcquisitionSettings."""
         z_stack = None
         if z_plan := sequence.z_plan:
             positions = np.array(list(z_plan))
             if len(positions) > 1:
                 step = np.abs(np.diff(positions)).mean() if len(positions) > 1 else 0
-                z_stack = ZStack(start_um=positions.min(), end_um=positions.max(), step_um=step)
+                z_stack = ZStack(
+                    start_um=positions.min(), end_um=positions.max(), step_um=step
+                )
 
         default_exposure = self.mmc.getExposure()
-        channels = [Channel(name=ch.config, exposure_ms=ch.exposure or default_exposure) for ch in sequence.channels]
+        channels = [
+            Channel(name=ch.config, exposure_ms=ch.exposure or default_exposure)
+            for ch in sequence.channels
+        ]
 
         num_timepoints = 1
         time_interval_s = 0.0
@@ -201,7 +216,10 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(message)
         print(message)
 
-        is_running = state in (AcquisitionState.ACQUIRING, AcquisitionState.PREPARING)
+        is_running = state in (
+            AcquisitionState.ACQUIRING,
+            AcquisitionState.PREPARING,
+        )
 
         if self._running_sequence:
             if is_running:

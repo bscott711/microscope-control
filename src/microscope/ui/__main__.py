@@ -6,7 +6,6 @@ from pathlib import Path
 from pymmcore_plus import CMMCorePlus
 from PySide6.QtCore import QtMsgType, qInstallMessageHandler
 from qtpy.QtWidgets import QApplication
-from superqt import QIconifyIcon
 
 from microscope.config import HardwareConstants
 from microscope.hardware.engine import AcquisitionEngine
@@ -30,49 +29,50 @@ def qt_message_handler(mode: QtMsgType, context, message: str):
 
 def main():
     """Main application entry point."""
+    # Setup logging and Qt message redirection
     qInstallMessageHandler(qt_message_handler)
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s")
+    logging.basicConfig(
+        stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s"
+    )
+    logger = logging.getLogger(__name__)
 
+    # Initialize Qt Application
     app = QApplication(sys.argv)
 
-    try:
-        _ = QIconifyIcon("mdi:home")
-        print("INFO: Icon system initialized successfully.")
-    except Exception as e:
-        print(f"WARNING: Could not prime icon system: {e}")
-
-    # Now proceed with the rest of the application setup
+    # Initialize Micro-Manager Core
     mmc = CMMCorePlus.instance()
-    mmc.unloadAllDevices()
-
     hal = HardwareAbstractionLayer(mmc)
     hw_constants = HardwareConstants()
-    engine = AcquisitionEngine(hal=hal, hw_constants=hw_constants)
-    win = MainWindow(engine)
-
-    win.show()
 
     try:
-        config_name = "demo.cfg" if os.getenv("MICROSCOPE_DEMO") else "20250523-OPM.cfg"
-        print(f"INFO: Loading configuration: {config_name}")
+        # --- Load Hardware Configuration FIRST ---
+        is_demo = os.getenv("MICROSCOPE_DEMO", "").lower() in ("1", "true")
+        config_name = "demo.cfg" if is_demo else "20250523-OPM.cfg"
+        logger.info(f"Loading configuration: {config_name}")
 
-        config_path = Path(__file__).parent.parent.parent.parent / "hardware_profiles"
+        config_path = (
+            Path(__file__).parent.parent.parent.parent / "hardware_profiles"
+        )
         config_file = config_path / config_name
 
-        mmc.unloadAllDevices()
+        if not config_file.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_file}")
+
         mmc.loadSystemConfiguration(str(config_file))
-
-        print("INFO: Discovering hardware devices...")
+        logger.info("Discovering hardware devices...")
         hal._discover_devices()
-
-        print("INFO: Initialization complete.")
+        logger.info("Initialization complete.")
 
     except Exception as e:
-        print(f"FATAL: Could not initialize microscope. Error: {e}")
-        import traceback
+        logger.critical(f"Could not initialize microscope: {e}", exc_info=True)
+        sys.exit(1)
 
-        traceback.print_exc()
+    # --- Create UI AFTER hardware is initialized ---
+    engine = AcquisitionEngine(hal=hal, hw_constants=hw_constants)
+    win = MainWindow(engine)
+    win.show()
 
+    # Run the application
     sys.exit(app.exec())
 
 

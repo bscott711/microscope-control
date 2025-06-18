@@ -131,7 +131,8 @@ class HardwareAbstractionLayer:
                 elif tiger_hub_label:
                     discovered[label] = StageHardwareController(label, tiger_hub_label, self.mmc)
             elif dev_type == DeviceType.AutoFocusDevice:
-                discovered[label] = CrispController(label, self.mmc)
+                if self.mmc.hasProperty(label, "Port"):
+                    discovered[label] = CrispController(label, self.mmc)
             elif "PLogic" in self.mmc.getDeviceLibrary(label):
                 self.plogic = PLogicController(label, self.mmc)
                 discovered[label] = self.plogic
