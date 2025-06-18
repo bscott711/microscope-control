@@ -153,24 +153,17 @@ class MainWindow(QMainWindow):
         settings = self._convert_sequence_to_settings(sequence)
         self.engine.run_acquisition(GalvoPLogicMDA(), settings)
 
-    def _convert_sequence_to_settings(
-        self, sequence: useq.MDASequence
-    ) -> AcquisitionSettings:
+    def _convert_sequence_to_settings(self, sequence: useq.MDASequence) -> AcquisitionSettings:
         """Robustly converts a useq.MDASequence to the engine's AcquisitionSettings."""
         z_stack = None
         if z_plan := sequence.z_plan:
             positions = np.array(list(z_plan))
             if len(positions) > 1:
                 step = np.abs(np.diff(positions)).mean() if len(positions) > 1 else 0
-                z_stack = ZStack(
-                    start_um=positions.min(), end_um=positions.max(), step_um=step
-                )
+                z_stack = ZStack(start_um=positions.min(), end_um=positions.max(), step_um=step)
 
         default_exposure = self.mmc.getExposure()
-        channels = [
-            Channel(name=ch.config, exposure_ms=ch.exposure or default_exposure)
-            for ch in sequence.channels
-        ]
+        channels = [Channel(name=ch.config, exposure_ms=ch.exposure or default_exposure) for ch in sequence.channels]
 
         num_timepoints = 1
         time_interval_s = 0.0

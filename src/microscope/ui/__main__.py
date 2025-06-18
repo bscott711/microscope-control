@@ -1,5 +1,3 @@
-# src/microscope/ui/__main__.py
-
 import logging
 import os
 import sys
@@ -13,8 +11,6 @@ from superqt import QIconifyIcon
 from microscope.config import HardwareConstants
 from microscope.hardware.engine import AcquisitionEngine
 from microscope.hardware.hal import HardwareAbstractionLayer
-
-# FIX: Removed unused QtLogHandler from import
 from microscope.ui.main_window import MainWindow
 
 
@@ -54,9 +50,6 @@ def main():
     engine = AcquisitionEngine(hal=hal, hw_constants=hw_constants)
     win = MainWindow(engine)
 
-    # FIX: The QtLogHandler and stdout redirection are no longer needed,
-    # as the CoreLogWidget in MainWindow handles this automatically.
-
     win.show()
 
     try:
@@ -72,9 +65,6 @@ def main():
         print("INFO: Discovering hardware devices...")
         hal._discover_devices()
 
-        print("INFO: Setting up device-specific widgets...")
-        # FIX: Renamed method to match the new name in MainWindow
-        win._setup_hardware_widgets()
         print("INFO: Initialization complete.")
 
     except Exception as e:
