@@ -31,9 +31,7 @@ def main():
     """Main application entry point."""
     # Setup logging and Qt message redirection
     qInstallMessageHandler(qt_message_handler)
-    logging.basicConfig(
-        stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s"
-    )
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s")
     logger = logging.getLogger(__name__)
 
     # Initialize Qt Application
@@ -50,9 +48,7 @@ def main():
         config_name = "demo.cfg" if is_demo else "20250523-OPM.cfg"
         logger.info(f"Loading configuration: {config_name}")
 
-        config_path = (
-            Path(__file__).parent.parent.parent.parent / "hardware_profiles"
-        )
+        config_path = Path(__file__).parent.parent.parent.parent / "hardware_profiles"
         config_file = config_path / config_name
 
         if not config_file.exists():
