@@ -63,6 +63,8 @@ This project uses `uv` for fast package management.
     **On macOS/Linux:**
 
     ```bash
+    arch -x86_64 zsh
+    source .venv/bin/activate  
     MICROSCOPE_DEMO=1 microscope-control
     ```
 
