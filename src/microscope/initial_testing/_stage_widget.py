@@ -133,9 +133,7 @@ class StageMovementButtons(QWidget):
 
     moveRequested = Signal(float, float)
 
-    def __init__(
-        self, levels: int = 2, show_x: bool = True, parent: QWidget | None = None
-    ) -> None:
+    def __init__(self, levels: int = 2, show_x: bool = True, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._levels = levels
         self._x_visible = show_x
@@ -266,9 +264,7 @@ class StageWidget(QWidget):
         self._Ylabel = "Y" if self._is_2axis else self._device
 
         # Initialize stage controller
-        self._stage_controller = QStageMoveAccumulator.for_device(
-            self._device, self._mmc
-        )
+        self._stage_controller = QStageMoveAccumulator.for_device(self._device, self._mmc)
 
         # WIDGETS ------------------------------------------------
 
@@ -334,9 +330,7 @@ class StageWidget(QWidget):
             main_layout.insertLayout(2, self._pos)
         else:
             move_btns_layout = cast("QGridLayout", self._move_btns.layout())
-            move_btns_layout.addLayout(
-                self._pos, 4, 4, 2, 2, Qt.AlignmentFlag.AlignBottom
-            )
+            move_btns_layout.addLayout(self._pos, 4, 4, 2, 2, Qt.AlignmentFlag.AlignBottom)
 
         if not self._is_2axis:
             self._invert_x.hide()
@@ -413,11 +407,7 @@ class StageWidget(QWidget):
             self._mmc.setProperty(CORE, prop, "")
 
     def _on_prop_changed(self, dev: str, prop: str, val: str) -> None:
-        if (
-            (dev != CORE)
-            or (self._is_2axis and prop != XY_STAGE)
-            or (not self._is_2axis and prop != FOCUS)
-        ):
+        if (dev != CORE) or (self._is_2axis and prop != XY_STAGE) or (not self._is_2axis and prop != FOCUS):
             return
         with signals_blocked(self._set_as_default_btn):
             self._set_as_default_btn.setChecked(val == self._device)
@@ -485,4 +475,3 @@ class StageWidget(QWidget):
         else:
             event = self._mmc.events.stagePositionChanged
         event.disconnect(self._update_position_from_core)
-

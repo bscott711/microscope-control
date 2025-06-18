@@ -20,7 +20,7 @@ class PiezoController:
 
     device: StageDevice
 
-    def __init__(self, device_label: str, mmc: CMMCorePlus):
+    def __init__(self, device_label: str, tiger_hub_label: str, mmc: CMMCorePlus):
         self._mmc = mmc
         device = self._mmc.getDeviceObject(device_label)
 
@@ -28,7 +28,16 @@ class PiezoController:
             raise TypeError(f"Device {device_label!r} is not a StageDevice, but a {type(device).__name__}")
         self.device = device
         self.label = self.device.label
-        self._asi = ASIPiezoCommands(mmc=self._mmc, command_device_label=self.label)
+        try:
+            self.axis = self.label.split(":")[1]
+        except IndexError as e:
+            raise ValueError(f"Could not parse axis from Piezo label: {self.label}") from e
+
+        self._asi = ASIPiezoCommands(
+            mmc=self._mmc,
+            command_device_label=tiger_hub_label,
+            piezo_device_label=self.label,
+        )
 
     def get_info(self) -> PiezoInfo:
         """
@@ -41,12 +50,11 @@ class PiezoController:
         # NOTE: The following are placeholders as min/max limits are not
         # directly available via a simple command in the provided asi_commands.
         # This would need to be expanded based on other properties or commands.
-        axis = "P"  # Assuming 'P' for a piezo stage
         limit_min = 0.0
         limit_max = 100.0
 
         return PiezoInfo(
-            axis=axis,
+            axis=self.axis,
             limit_min=limit_min,
             limit_max=limit_max,
             current_pos=current_pos,

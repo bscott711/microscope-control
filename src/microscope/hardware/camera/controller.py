@@ -17,6 +17,15 @@ class CameraHardwareController:
     A high-level controller for a camera device.
 
     This class uses composition to wrap a pymmcore_plus.Device object.
+
+    The camera's 'TriggerMode' property can be set to one of the following:
+    - Internal Trigger
+    - Edge Trigger
+    - Level Trigger
+    - Level Trigger Overlap
+    - Trigger First
+    - Software Trigger Edge
+    - Software Trigger First
     """
 
     device: CameraDevice
@@ -26,13 +35,31 @@ class CameraHardwareController:
         device = self._mmc.getDeviceObject(device_label)
 
         if not isinstance(device, CameraDevice):
-            raise TypeError(f"Device {device_label!r} is not a CameraDevice, but a {type(device).__name__}")
+            raise TypeError(
+                f"Device {device_label!r} is not a CameraDevice, "
+                f"but a {type(device).__name__}"
+            )
         self.device = device
         self.label = self.device.label
 
+    def find_and_set_trigger_mode(self, desired_modes: list[str]) -> bool:
+        """
+        Finds and sets the first available trigger mode from a list of desired modes.
+        """
+        if not self._mmc.hasProperty(self.label, "TriggerMode"):
+            return False
+        try:
+            allowed = self._mmc.getAllowedPropertyValues(self.label, "TriggerMode")
+            for mode in desired_modes:
+                if mode in allowed:
+                    self._mmc.setProperty(self.label, "TriggerMode", mode)
+                    return True
+            return False
+        except Exception:
+            return False
+
     def pop_from_buffer(self) -> np.ndarray | None:
         """Pops and returns the next image from the circular buffer, if available."""
-        # FIX: These methods must be called on the core CMMCorePlus object.
         if self._mmc.getRemainingImageCount() > 0:
             return self._mmc.popNextImage()
         return None
@@ -47,5 +74,4 @@ class CameraHardwareController:
 
     def snap(self) -> np.ndarray:
         """Snap and return an image."""
-        # FIX: snap() is a convenience method on the core CMMCorePlus object.
         return self._mmc.snap()

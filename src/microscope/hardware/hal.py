@@ -127,7 +127,8 @@ class HardwareAbstractionLayer:
                 discovered[label] = XYStageHardwareController(label, tiger_hub_label, self.mmc)
             elif dev_type == DeviceType.StageDevice:
                 if "piezo" in label.lower():
-                    discovered[label] = PiezoController(label, self.mmc)
+                    if tiger_hub_label:
+                        discovered[label] = PiezoController(label, tiger_hub_label, self.mmc)
                 elif tiger_hub_label:
                     discovered[label] = StageHardwareController(label, tiger_hub_label, self.mmc)
             elif dev_type == DeviceType.AutoFocusDevice:
