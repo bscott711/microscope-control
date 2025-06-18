@@ -1,5 +1,3 @@
-# src/microscope/ui/main_window.py
-
 from datetime import timedelta
 from typing import Any, Union
 
@@ -75,58 +73,55 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Microscope Control")
         self.setStyleSheet(STYLESHEET)
+        # A larger default size gives the central widget more space
+        self.resize(1280, 960)
 
         self.engine = engine
         if not isinstance(engine.hal.mmc, CMMCorePlus):
             raise TypeError("Engine's HAL must have a valid CMMCorePlus instance.")
         self.mmc: CMMCorePlus = engine.hal.mmc
 
-        # Create widgets
+        # -- Set Central Widget --
         self.viewer = ImagePreview()
         self.setCentralWidget(self.viewer)
-        self.mda_widget = CustomMDAWidget()
-        self.log_widget = CoreLogWidget()
 
-        # Arrange widgets
+        # -- Create and Arrange Dock Widgets --
+
+        # Left Dock: MDA Controls
+        self.mda_widget = CustomMDAWidget()
         mda_dock = QDockWidget("MDA", self)
         mda_dock.setWidget(self.mda_widget)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, mda_dock)
 
+        # Right Dock: Hardware Controls
+        hw_dock = QDockWidget("Hardware Controls", self)
+        hw_tabs = QTabWidget()
+        hw_dock.setWidget(hw_tabs)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, hw_dock)
+
+        # Bottom Dock: Core Log
+        self.log_widget = CoreLogWidget()
         log_dock = QDockWidget("Log", self)
         log_dock.setWidget(self.log_widget)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, log_dock)
 
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
+        # -- Populate Hardware Controls Dock --
 
-        self._setup_hardware_widgets()
-        self.connect_signals()
-
-    def _setup_hardware_widgets(self):
-        """Creates dock widgets with tabbed hardware controls."""
-        hw_dock = QDockWidget("Hardware Controls", self)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, hw_dock)
-        tabs = QTabWidget()
-        hw_dock.setWidget(tabs)
-
-        # -- Live Controls Tab --
+        # Live Controls Tab
         live_tab = QWidget()
         live_layout = QGridLayout(live_tab)
         live_layout.setContentsMargins(10, 10, 10, 10)
-        tabs.addTab(live_tab, "Live")
-
         live_layout.addWidget(SnapButton(), 0, 0)
         live_layout.addWidget(LiveButton(), 0, 1)
         live_layout.addWidget(DefaultCameraExposureWidget(), 1, 0, 1, 2)
         live_layout.addWidget(ChannelWidget(), 2, 0, 1, 2)
-        live_layout.setRowStretch(3, 1)
+        live_layout.setRowStretch(3, 1)  # Pushes widgets to the top
+        hw_tabs.addTab(live_tab, "Live")
 
-        # -- Stage/Objectives Tab --
+        # Stage/Objectives Tab
         stage_tab = QWidget()
         stage_layout = QVBoxLayout(stage_tab)
         stage_layout.setContentsMargins(10, 10, 10, 10)
-        tabs.addTab(stage_tab, "Stage")
-
         try:
             stage_device_label = self.mmc.getXYStageDevice()
             if stage_device_label:
@@ -137,7 +132,13 @@ class MainWindow(QMainWindow):
             stage_layout.addWidget(ObjectivesWidget())
         except Exception as e:
             print(f"WARNING: Could not create objectives widget: {e}")
-        stage_layout.addStretch()
+        stage_layout.addStretch()  # Pushes widgets to the top
+        hw_tabs.addTab(stage_tab, "Stage")
+
+        # -- Final Setup --
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.connect_signals()
 
     def connect_signals(self):
         """Connect all signals between the UI and the engine."""
@@ -152,17 +153,24 @@ class MainWindow(QMainWindow):
         settings = self._convert_sequence_to_settings(sequence)
         self.engine.run_acquisition(GalvoPLogicMDA(), settings)
 
-    def _convert_sequence_to_settings(self, sequence: useq.MDASequence) -> AcquisitionSettings:
+    def _convert_sequence_to_settings(
+        self, sequence: useq.MDASequence
+    ) -> AcquisitionSettings:
         """Robustly converts a useq.MDASequence to the engine's AcquisitionSettings."""
         z_stack = None
         if z_plan := sequence.z_plan:
             positions = np.array(list(z_plan))
             if len(positions) > 1:
                 step = np.abs(np.diff(positions)).mean() if len(positions) > 1 else 0
-                z_stack = ZStack(start_um=positions.min(), end_um=positions.max(), step_um=step)
+                z_stack = ZStack(
+                    start_um=positions.min(), end_um=positions.max(), step_um=step
+                )
 
         default_exposure = self.mmc.getExposure()
-        channels = [Channel(name=ch.config, exposure_ms=ch.exposure or default_exposure) for ch in sequence.channels]
+        channels = [
+            Channel(name=ch.config, exposure_ms=ch.exposure or default_exposure)
+            for ch in sequence.channels
+        ]
 
         num_timepoints = 1
         time_interval_s = 0.0
