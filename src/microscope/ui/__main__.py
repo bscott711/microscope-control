@@ -35,9 +35,7 @@ def qt_message_handler(mode: QtMsgType, context, message: str):
 def main():
     """Main application entry point."""
     qInstallMessageHandler(qt_message_handler)
-    logging.basicConfig(
-        stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s"
-    )
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(name)s: %(message)s")
 
     app = QApplication(sys.argv)
 
@@ -62,9 +60,7 @@ def main():
     win.show()
 
     try:
-        config_name = (
-            "demo.cfg" if os.getenv("MICROSCOPE_DEMO") else "20250523-OPM.cfg"
-        )
+        config_name = "demo.cfg" if os.getenv("MICROSCOPE_DEMO") else "20250523-OPM.cfg"
         print(f"INFO: Loading configuration: {config_name}")
 
         config_path = Path(__file__).parent.parent.parent.parent / "hardware_profiles"

@@ -59,9 +59,7 @@ class AcquisitionWorker(QRunnable):
             while frames_acquired < total_frames and not self._cancelled:
                 # Ensure camera is present on each loop iteration
                 if not self.hal.camera:
-                    self.signals.acquisition_error.emit(
-                        "Acquisition aborted: Camera not available."
-                    )
+                    self.signals.acquisition_error.emit("Acquisition aborted: Camera not available.")
                     break
 
                 # pop_from_buffer safely handles checking for available images.
@@ -72,9 +70,7 @@ class AcquisitionWorker(QRunnable):
                 else:
                     # FIX: Add a defensive check for self.hal.mmc to satisfy Pylance.
                     if self.hal.mmc and not self.hal.mmc.isSequenceRunning():
-                        print(
-                            "WARN: Camera sequence stopped before all frames were acquired."
-                        )
+                        print("WARN: Camera sequence stopped before all frames were acquired.")
                         break
                     # If the sequence is still running, wait a moment for the next frame.
                     time.sleep(0.005)
@@ -133,9 +129,7 @@ class AcquisitionEngine(QObject):
         # Connect worker signals to the engine's public signals
         self.worker.signals.state_changed.connect(self.signals.state_changed)
         self.worker.signals.frame_acquired.connect(self.signals.frame_acquired)
-        self.worker.signals.acquisition_finished.connect(
-            self.signals.acquisition_finished
-        )
+        self.worker.signals.acquisition_finished.connect(self.signals.acquisition_finished)
         self.worker.signals.acquisition_error.connect(self.signals.acquisition_error)
         self.thread_pool.start(self.worker)
 

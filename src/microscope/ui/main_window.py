@@ -1,7 +1,7 @@
 # src/microscope/ui/main_window.py
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, Union
 
 import numpy as np
 import useq
@@ -44,6 +44,7 @@ class CustomMDAWidget(MDAWidget):
     """
     A subclass of MDAWidget that allows a custom acquisition engine to be used.
     """
+
     # FIX: Explicitly declare the signals to make them known to Pylance.
     started = Signal(useq.MDASequence)
     stop_requested = Signal()
@@ -68,7 +69,7 @@ class CustomMDAWidget(MDAWidget):
 class MainWindow(QMainWindow):
     """The main application window, with all type-checking errors fixed."""
 
-    _running_sequence: useq.MDASequence | None = None
+    _running_sequence: Union[useq.MDASequence, None] = None
 
     def __init__(self, engine: AcquisitionEngine):
         super().__init__()
@@ -151,24 +152,17 @@ class MainWindow(QMainWindow):
         settings = self._convert_sequence_to_settings(sequence)
         self.engine.run_acquisition(GalvoPLogicMDA(), settings)
 
-    def _convert_sequence_to_settings(
-        self, sequence: useq.MDASequence
-    ) -> AcquisitionSettings:
+    def _convert_sequence_to_settings(self, sequence: useq.MDASequence) -> AcquisitionSettings:
         """Robustly converts a useq.MDASequence to the engine's AcquisitionSettings."""
         z_stack = None
         if z_plan := sequence.z_plan:
             positions = np.array(list(z_plan))
             if len(positions) > 1:
                 step = np.abs(np.diff(positions)).mean() if len(positions) > 1 else 0
-                z_stack = ZStack(
-                    start_um=positions.min(), end_um=positions.max(), step_um=step
-                )
+                z_stack = ZStack(start_um=positions.min(), end_um=positions.max(), step_um=step)
 
         default_exposure = self.mmc.getExposure()
-        channels = [
-            Channel(name=ch.config, exposure_ms=ch.exposure or default_exposure)
-            for ch in sequence.channels
-        ]
+        channels = [Channel(name=ch.config, exposure_ms=ch.exposure or default_exposure) for ch in sequence.channels]
 
         num_timepoints = 1
         time_interval_s = 0.0

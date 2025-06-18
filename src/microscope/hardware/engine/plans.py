@@ -48,9 +48,7 @@ class GalvoPLogicMDA(AcquisitionPlan):
         """Configures PLogic, Galvo, and Camera for the MDA."""
         # Use individual checks to help the type checker narrow the types
         if not hal.camera or not hal.scanner or not hal.plogic or not settings.z_stack:
-            raise RuntimeError(
-                "Required hardware (Camera, Scanner, PLogic) and Z-stack settings not found."
-            )
+            raise RuntimeError("Required hardware (Camera, Scanner, PLogic) and Z-stack settings not found.")
 
         print("INFO: Configuring hardware with GalvoPLogicMDA plan...")
 
@@ -62,10 +60,7 @@ class GalvoPLogicMDA(AcquisitionPlan):
 
         # 3. Configure Galvo scan pattern
         # FIX: Correctly access z_stack parameters and derive piezo center
-        x_amplitude_mv = (
-            hw_constants.sheet_width_deg
-            * hw_constants.slice_calibration_slope_um_per_deg
-        )
+        x_amplitude_mv = hw_constants.sheet_width_deg * hw_constants.slice_calibration_slope_um_per_deg
         y_amplitude_mv = settings.num_slices * settings.z_stack.step_um
         piezo_center_um = (settings.z_stack.start_um + settings.z_stack.end_um) / 2
 
