@@ -3,7 +3,7 @@ from pymmcore_plus import CMMCorePlus
 mmc = CMMCorePlus()
 
 # Try loading custom config
-mmc.loadSystemConfiguration("hardware_profiles\\demo.cfg")
+mmc.loadSystemConfiguration("hardware_profiles/demo.cfg")
 
 # --- Print Device Roles ---
 print("=== Device Roles ===")
