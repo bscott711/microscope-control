@@ -1,10 +1,10 @@
-# filename: final_validate_script_v13.py
+# filename: final_validate_script_v14.py
 """
-FINAL v13 Phase 1: Correct High-Level Command Usage
+FINAL v14 Phase 1: Complete Hardware Validation (Laser Enable Command)
 
-This script corrects the logic by abandoning manual PLogic programming and
-instead using the correct, high-level `RT` (RTIME) command to explicitly
-set the laser and camera pulse durations as required by the SPIM firmware.
+This script adds the critical 'LED X=1' command to enable the logical laser
+output before the scan begins. This should resolve the issue of the camera
+firing while the laser does not.
 """
 
 import logging
@@ -48,7 +48,7 @@ def send_tiger_command(mmc: CMMCorePlus, command: str):
 # --- Main Script ---
 def main():
     """Main validation function."""
-    print("--- FINAL v13 Phase 1: High-Level RTIME Validation ---")
+    print("--- FINAL v14 Phase 1: Laser Enable Validation ---")
     mmc = CMMCorePlus.instance()
     original_camera_trigger_mode = ""
     cam_label = CONFIG["camera_device_label"]
@@ -59,8 +59,6 @@ def main():
         mmc.loadSystemConfiguration(CONFIG["mmc_config_file"])
         original_camera_trigger_mode = mmc.getProperty(cam_label, "TriggerMode")
         print(f"Setting camera to 'Level Trigger' mode (was '{original_camera_trigger_mode}')...")
-        # NOTE: Your camera documentation may call this 'External' or 'Bulb'.
-        # 'Level' or 'Bulb' is correct for a trigger that is high for the exposure duration.
         mmc.setProperty(cam_label, "TriggerMode", "Level Trigger")
 
         # --- 2. Configure Galvo Scan & Pulse Durations ---
@@ -74,7 +72,7 @@ def main():
         # A) Calculate and set the physical scan dimensions
         total_scan_range_um = (num_slices - 1) * CONFIG["step_size_um"]
         scan_amplitude_deg = total_scan_range_um / CONFIG["slice_calibration_um_per_deg"]
-        scan_offset_deg = CONFIG["z_center_um"] / CONFIG["slice_calibration_um_per_deg"]
+        scan_offset_deg = 0
 
         send_tiger_command(mmc, f"{scanner_addr}SAA {fast_axis}={scan_amplitude_deg}")
         send_tiger_command(mmc, f"{scanner_addr}SAO {fast_axis}={scan_offset_deg}")
@@ -82,12 +80,14 @@ def main():
         # B) Set the number of slices for the SPIM routine
         send_tiger_command(mmc, f"{scanner_addr}NR Y={num_slices}")
 
-        # C) == BUG FIX ==
-        # Use the RT command to explicitly set laser and camera pulse durations.
-        # This is the correct method for the high-level SPIM firmware.
-        # R = laser_duration, T = camera_duration
+        # C) Use the RT command to explicitly set laser and camera pulse durations
         print(f"Setting laser and camera pulse durations to {exposure_ms} ms using RT command...")
         send_tiger_command(mmc, f"{scanner_addr}RT R={exposure_ms} T={exposure_ms}")
+
+        # D) == BUG FIX ==
+        # Use the LED command to enable the "Side0" logical laser output.
+        print("Enabling logical laser output...")
+        send_tiger_command(mmc, f"{scanner_addr}LED X=1")
 
         print("SPIM firmware fully configured.")
 
@@ -106,7 +106,6 @@ def main():
             time.sleep(0.5)
 
         images_received = mmc.getRemainingImageCount()
-        # Pop images from buffer to clear it for next run, even if not saved.
         for _ in range(images_received):
             mmc.popNextImage()
 
@@ -120,6 +119,8 @@ def main():
         print("\n--- Performing Cleanup ---")
         if mmc.getLoadedDevices():
             scanner_addr = CONFIG["scanner_card_address"]
+            # Disable the logical laser and stop the scan
+            send_tiger_command(mmc, f"{scanner_addr}LED X=0")
             send_tiger_command(mmc, f"{scanner_addr}SCAN X={ScanState.STOP}")
             if mmc.isSequenceRunning():
                 mmc.stopSequenceAcquisition()
@@ -129,7 +130,7 @@ def main():
             mmc.reset()
             print("System reset and unloaded.")
 
-    print("\n--- FINAL v13 Validation Script Complete ---")
+    print("\n--- FINAL v14 Validation Script Complete ---")
 
 
 if __name__ == "__main__":
