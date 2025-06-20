@@ -25,17 +25,17 @@ class AcquisitionSettings:
     step_size_um: float = 1.0
     piezo_center_um: float = -31.0
     laser_trig_duration_ms: float = 10.0
-    delay_before_camera_ms: float = 0.0#18.0
+    delay_before_camera_ms: float = 0.0  # 18.0
 
     @property
     def camera_exposure_ms(self) -> float:
         """Derived camera exposure time."""
-        return self.laser_trig_duration_ms #+ 1.95
+        return self.laser_trig_duration_ms  # + 1.95
 
     @property
     def delay_before_laser_ms(self) -> float:
         """Derived laser delay time."""
-        return self.delay_before_camera_ms #+ 1.25
+        return self.delay_before_camera_ms  # + 1.25
 
 
 @dataclass
