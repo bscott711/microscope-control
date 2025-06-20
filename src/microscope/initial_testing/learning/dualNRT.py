@@ -26,7 +26,6 @@ class AcquisitionSettings:
     piezo_center_um: float = -31.0
     laser_trig_duration_ms: float = 10.0
     camera_exposure_ms: float = 10.0
-    delay_before_camera_ms: float = 0.0
 
 
 @dataclass
@@ -41,15 +40,13 @@ class HardwareConstants:
     plogic_label: str = "PLogic:E:36"
     tiger_comm_hub_label: str = "TigerCommHub"
     # PLogic addresses and presets
-    plogic_camera_trigger_ttl_addr: int = 41
-    plogic_laser_trigger_ttl_addr: int = 42
-    plogic_galvo_trigger_ttl_addr: int = 43
+    plogic_trigger_ttl_addr: int = 41
     plogic_4khz_clock_addr: int = 192
     plogic_laser_on_cell: int = 10
-    plogic_laser_preset_num: int = 5
-    plogic_delay_before_laser_cell: int = 11
-    plogic_delay_before_camera_cell: int = 12
+    plogic_camera_cell: int = 11
     pulses_per_ms: float = 4.0
+    # Laser Preset Configuration
+    plogic_laser_preset_num: int = 5
     # Calibration
     slice_calibration_slope_um_per_deg: float = 100.0
     slice_calibration_offset_um: float = 0.0
@@ -84,6 +81,21 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
     """
     Configures PLogic to generate two independent, synchronized NRT one-shot pulses.
     This version sends all serial commands in a single, efficient batch.
+
+    There are 4 main steps:
+    1. Move the axis position to the cell.
+    2. Select the type of cell.
+    3. Set the cell configuration parameters.
+    4. Set the cell inputs.
+
+    An example command sequence to configure cell 10 for a One Shot NRT pulse off the Tiger
+    Backplane TTL0 and clocked by the 4kHz Tiger Clock:
+    ```
+    M E=10                  # Move to cell 10
+    CCA Y=14                # Set cell type to NRT One-Shot
+    CCA Z=40                # Set duration to 40 cycles (10ms)
+    CCB X=41 Y=128          # Set inputs: TTL41 (Tiger Comm Hub TTL0) and 4kHz clock
+    ```
     """
     plogic_addr_prefix = HW.plogic_label.split(":")[-1]
     hub_label = HW.tiger_comm_hub_label
@@ -93,7 +105,7 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
     def _send(cmd: str):
         """Internal helper to send a command and sleep."""
         mmc.setProperty(hub_label, "SerialCommand", cmd)
-        time.sleep(0.02)
+        time.sleep(0.01)  # Short sleep to allow command processing
 
     try:
         # Set hub to send all commands regardless of change
@@ -101,32 +113,36 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
             mmc.setProperty(hub_label, hub_prop, "No")
 
         # --- Batch PLogic Configuration ---
+        # 0. Reset PLogic
+        _send(f"{plogic_addr_prefix}CCA X=0")  # Reset all cells
 
-        # 1. Configure BNC Outputs
-        _send("M E=33")  # Point to BNC1
-        _send(f"{plogic_addr_prefix}CCA Y=2")  # Set as push-pull output
-        _send(f"{plogic_addr_prefix}CCA X={HW.plogic_laser_preset_num}")  # Use preset for BNC5
+        # 1. Program Laser Preset
+        _send(f"{plogic_addr_prefix}CCA X={HW.plogic_laser_preset_num}")
+        print(f"Laser preset number: {HW.plogic_laser_preset_num}")
 
         # 2. Program Camera Pulse (NRT One-Shot #1)
-        _send(f"M E={HW.plogic_delay_before_camera_cell}")
+        _send(f"M E={HW.plogic_camera_cell}")  # Point to Camera Cell, 11
         _send(f"{plogic_addr_prefix}CCA Y=14")  # Type: NRT one-shot
         camera_pulse_cycles = int(settings.camera_exposure_ms * HW.pulses_per_ms)
         _send(f"{plogic_addr_prefix}CCA Z={camera_pulse_cycles}")  # Set duration
-        camera_trigger = HW.plogic_camera_trigger_ttl_addr
         clock_source = HW.plogic_4khz_clock_addr
-        _send(f"{plogic_addr_prefix}CCB X={camera_trigger} Y={clock_source} Z=0")
+        trigger = HW.plogic_trigger_ttl_addr
+        _send(f"{plogic_addr_prefix}CCB X={trigger} Y={clock_source} Z=0")
 
-        # 3. Program Laser Pulse (NRT One-Shot #2)
+        # 4. Program Laser Pulse (NRT One-Shot #2)
         _send(f"M E={HW.plogic_laser_on_cell}")
         _send(f"{plogic_addr_prefix}CCA Y=14")  # Type: NRT one-shot
         laser_pulse_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
         _send(f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}")  # Set duration
-        laser_trigger = HW.plogic_laser_trigger_ttl_addr
-        _send(f"{plogic_addr_prefix}CCB X={laser_trigger} Y={clock_source} Z=0")
+        _send(f"{plogic_addr_prefix}CCB X={trigger} Y={clock_source} Z=0")
 
-        # 4. Route Cell Outputs to BNCs
+        # 3. Route Cell Outputs to BNCs
         _send("M E=33")  # Point to BNC1
-        _send(f"{plogic_addr_prefix}CCA Z={HW.plogic_delay_before_camera_cell}")
+        _send(f"{plogic_addr_prefix}CCA Z={HW.plogic_camera_cell}")
+
+        # 5. Save the configuration
+        _send(f"{plogic_addr_prefix}SS Z")  # Save configuration to non-volatile memory
+        print("PLogic configured for dual NRT pulses successfully.")
 
     finally:
         # IMPORTANT: Always restore the original hub setting
