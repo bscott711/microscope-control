@@ -14,8 +14,9 @@ from pymmcore_plus import CMMCorePlus
 from tigerasi.tiger_controller import TigerController
 
 # --- Configuration (with separate cells for Laser and Camera) ---
+
 CONFIG = {
-    "mmc_config_file": "C:/path/to/your/hardware_profiles/20250523-OPM.cfg",
+    "mmc_config_file": "hardware_profiles/20250523-OPM.cfg",
     "com_port": "COM4",  # <-- IMPORTANT: SET YOUR COM PORT
     "plogic_card_address": "36",
     # Device labels
@@ -88,7 +89,7 @@ def main():
         mmc.loadSystemConfiguration(CONFIG["mmc_config_file"])
         original_camera_trigger_mode = mmc.getProperty(cam_label, "TriggerMode")
         print(f"Setting camera to Level Trigger mode (was '{original_camera_trigger_mode}')...")
-        mmc.setProperty(cam_label, "TriggerMode", "Level")
+        mmc.setProperty(cam_label, "TriggerMode", "Level Trigger")
 
         # --- 2. Tiger Controller Connection (tigerasi) ---
         print(f"Connecting to Tiger Controller on {CONFIG['com_port']}...")
