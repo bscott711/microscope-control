@@ -41,8 +41,6 @@ class HardwareConstants:
     plogic_label: str = "PLogic:E:36"
     tiger_comm_hub_label: str = "TigerCommHub"
     # PLogic addresses and presets
-    # CORRECTED: Use standard diSPIM backplane addresses for camera and laser triggers.
-    # Camera A is on TTL0 (41) and Laser Trigger is on TTL1 (42).
     plogic_camera_trigger_ttl_addr: int = 41
     plogic_laser_trigger_ttl_addr: int = 42
     plogic_galvo_trigger_ttl_addr: int = 43
@@ -67,26 +65,14 @@ class HardwareConstants:
     delay_before_side_ms: float = 0.0
     camera_mode_is_overlap: bool = False
 
+
 # Instantiate constants
 HW = HardwareConstants()
 
 
 # --- Low-Level Helper Functions ---
-def _execute_tiger_serial_command(command_string: str):
-    """
-    DEPRECATED: This function is inefficient for sending multiple commands.
-    Kept for reference but should not be used for new code.
-    """
-    original_setting = mmc.getProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange")
-    if original_setting == "Yes":
-        mmc.setProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange", "No")
-    mmc.setProperty(HW.tiger_comm_hub_label, "SerialCommand", command_string)
-    if original_setting == "Yes":
-        mmc.setProperty(HW.tiger_comm_hub_label, "OnlySendSerialCommandOnChange", "Yes")
-    time.sleep(0.02)
-
-
 def set_property(device_label: str, property_name: str, value):
+    """Sets a Micro-Manager device property if it has changed."""
     if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, property_name):
         if mmc.getProperty(device_label, property_name) != str(value):
             mmc.setProperty(device_label, property_name, value)
@@ -99,7 +85,6 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
     Configures PLogic to generate two independent, synchronized NRT one-shot pulses.
     This version sends all serial commands in a single, efficient batch.
     """
-    print("Configuring PLogic card for dual NRT one-shot pulses...")
     plogic_addr_prefix = HW.plogic_label.split(":")[-1]
     hub_label = HW.tiger_comm_hub_label
     hub_prop = "OnlySendSerialCommandOnChange"
@@ -147,7 +132,6 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
         # IMPORTANT: Always restore the original hub setting
         if original_hub_setting == "Yes":
             mmc.setProperty(hub_label, hub_prop, "Yes")
-        print("PLogic configuration complete.")
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -176,14 +160,13 @@ def configure_devices_for_slice_scan(
     galvo_center_deg: float,
     num_slices_ctrl: int,
 ):
+    """Configures galvo and piezo for a single volume scan."""
+    print("DEBUG: Configuring devices for new volume scan...")
     piezo_fixed_pos_um = round(settings.piezo_center_um, 3)
     set_property(HW.galvo_a_label, "BeamEnabled", "Yes")
 
-    # Call the new, stable PLogic function
-    print("DEBUG: About to configure PLogic.")
-    configure_plogic_for_dual_nrt_pulses(settings)
-    print("DEBUG: PLogic configuration finished. Setting galvo properties...")
-
+    # PLogic configuration is now done only once at the start of the time-series.
+    # Setting galvo and piezo properties for the scan:
     set_property(HW.galvo_a_label, "SPIMNumSlicesPerPiezo", HW.line_scans_per_slice)
     set_property(HW.galvo_a_label, "SPIMDelayBeforeRepeat(ms)", HW.delay_before_scan_ms)
     set_property(HW.galvo_a_label, "SPIMNumRepeats", 1)
@@ -207,7 +190,7 @@ def configure_devices_for_slice_scan(
     set_property(HW.piezo_a_label, "SingleAxisOffset(um)", piezo_fixed_pos_um)
     set_property(HW.piezo_a_label, "SPIMNumSlices", num_slices_ctrl)
     set_property(HW.piezo_a_label, "SPIMState", "Armed")
-    print("DEBUG: All device properties set.")
+    print("DEBUG: All device properties set for this volume.")
 
 
 def trigger_slice_scan_acquisition():
@@ -476,9 +459,14 @@ class AcquisitionGUI:
             self.pixel_size_um = 1.0
             print("Warning: Could not get pixel size. Defaulting to 1.0 µm.")
 
+        # Configure the PLogic card ONCE at the beginning of the whole series.
+        print("\n--- Performing One-Time PLogic Configuration ---")
+        configure_plogic_for_dual_nrt_pulses(self.settings)
+        print("--- PLogic Configuration Complete ---")
+
         self.current_time_point = 0
         self._update_all_estimates()
-        print("\n--- Starting Time Series ---")
+        print("\n--- Starting Time Series Loop ---")
         self._start_next_volume()
 
     def _start_next_volume(self):
@@ -494,11 +482,15 @@ class AcquisitionGUI:
             ) = calculate_galvo_parameters(self.settings)
             mmc.setCameraDevice(self.hw_interface.camera1)
             if not self.hw_interface.find_and_set_trigger_mode(
-                self.hw_interface.camera1,
-                ["Level Trigger", "Edge Trigger"],
+                self.hw_interface.camera1, ["Level Trigger", "Edge Trigger"]
             ):
                 raise RuntimeError("Failed to set external trigger mode.")
-            configure_devices_for_slice_scan(self.settings, galvo_amp, galvo_center, self.images_expected_per_volume)
+            configure_devices_for_slice_scan(
+                self.settings,
+                galvo_amp,
+                galvo_center,
+                self.images_expected_per_volume,
+            )
             mmc.setExposure(self.hw_interface.camera1, self.settings.camera_exposure_ms)
             mmc.initializeCircularBuffer()
             mmc.startSequenceAcquisition(self.hw_interface.camera1, self.images_expected_per_volume, 0, True)
