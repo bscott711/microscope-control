@@ -46,7 +46,7 @@ class HardwareConstants:
     plogic_camera_cell: int = 11
     pulses_per_ms: float = 4.0
     # Laser Preset Configuration
-    plogic_laser_preset_num: int = 5
+    plogic_laser_preset_num: int = 30 #5
     # Calibration
     slice_calibration_slope_um_per_deg: float = 100.0
     slice_calibration_offset_um: float = 0.0
@@ -76,6 +76,28 @@ def set_property(device_label: str, property_name: str, value):
     else:
         print(f"Warning: Cannot set '{property_name}' for device '{device_label}'. Device or property not found.")
 
+
+def get_property(device_label: str, property_name: str) -> str | None:
+    """
+    Safely gets a Micro-Manager device property value.
+
+    Args:
+        device_label: The label of the device in Micro-Manager.
+        property_name: The name of the property to retrieve.
+
+    Returns:
+        The property value as a string if found, otherwise None.
+    """
+    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(
+        device_label, property_name
+    ):
+        return mmc.getProperty(device_label, property_name)
+
+    print(
+        f"Warning: Cannot get '{property_name}' for device '{device_label}'. "
+        "Device or property not found."
+    )
+    return None
 
 def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
     """
@@ -116,8 +138,9 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
         # 0. Reset PLogic
         _send(f"{plogic_addr_prefix}CCA X=0")  # Reset all cells
 
-        # 1. Program Laser Preset
+        # 1. Program Laser Preset and Laser Indicator
         _send(f"{plogic_addr_prefix}CCA X={HW.plogic_laser_preset_num}")
+        _send(f"{plogic_addr_prefix}CCA X=27")  # This will turn on the laser indicator (BNC3)
         print(f"Laser preset number: {HW.plogic_laser_preset_num}")
 
         # 2. Program Camera Pulse (NRT One-Shot #1)
@@ -129,14 +152,14 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
         trigger = HW.plogic_trigger_ttl_addr
         _send(f"{plogic_addr_prefix}CCB X={trigger} Y={clock_source} Z=0")
 
-        # 4. Program Laser Pulse (NRT One-Shot #2)
+        # 3. Program Laser Pulse (NRT One-Shot #2)
         _send(f"M E={HW.plogic_laser_on_cell}")
         _send(f"{plogic_addr_prefix}CCA Y=14")  # Type: NRT one-shot
         laser_pulse_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
         _send(f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}")  # Set duration
         _send(f"{plogic_addr_prefix}CCB X={trigger} Y={clock_source} Z=0")
 
-        # 3. Route Cell Outputs to BNCs
+        # 4. Route Cell Outputs to BNCs
         _send("M E=33")  # Point to BNC1
         _send(f"{plogic_addr_prefix}CCA Z={HW.plogic_camera_cell}")
 
@@ -178,7 +201,7 @@ def configure_devices_for_slice_scan(
 ):
     """Configures galvo and piezo for a single volume scan."""
     print("DEBUG: Configuring devices for new volume scan...")
-    piezo_fixed_pos_um = round(settings.piezo_center_um, 3)
+    # piezo_fixed_pos_um = round(settings.piezo_center_um, 3)  # noqa: F841
     set_property(HW.galvo_a_label, "BeamEnabled", "Yes")
 
     # PLogic configuration is now done only once at the start of the time-series.
@@ -194,36 +217,46 @@ def configure_devices_for_slice_scan(
     )
     set_property(HW.galvo_a_label, "SPIMScanDuration(ms)", HW.line_scan_duration_ms)
     set_property(HW.galvo_a_label, "SingleAxisYAmplitude(deg)", galvo_amplitude_deg)
-    set_property(HW.galvo_a_label, "SingleAxisYOffset(deg)", galvo_center_deg)
+    set_property(HW.galvo_a_label, "SingleAxisYOffset(deg)", 0) #galvo_center_deg)
     set_property(HW.galvo_a_label, "SPIMNumSlices", num_slices_ctrl)
-    set_property(HW.galvo_a_label, "SPIMNumSides", HW.num_sides)
-    set_property(HW.galvo_a_label, "SPIMFirstSide", "A" if HW.first_side_is_a else "B")
+    set_property(HW.galvo_a_label, "SPIMNumSides", 1)
+    set_property(HW.galvo_a_label, "SPIMFirstSide", "A")
     set_property(HW.galvo_a_label, "SPIMPiezoHomeDisable", "No")
     set_property(HW.galvo_a_label, "SPIMInterleaveSidesEnable", "No")
-    set_property(HW.galvo_a_label, "SingleAxisXAmplitude(deg)", HW.sheet_width_deg)
-    set_property(HW.galvo_a_label, "SingleAxisXOffset(deg)", HW.sheet_offset_deg)
-    set_property(HW.piezo_a_label, "SingleAxisAmplitude(um)", 0.0)
-    set_property(HW.piezo_a_label, "SingleAxisOffset(um)", piezo_fixed_pos_um)
-    set_property(HW.piezo_a_label, "SPIMNumSlices", num_slices_ctrl)
-    set_property(HW.piezo_a_label, "SPIMState", "Armed")
+    set_property(HW.galvo_a_label, "SingleAxisXAmplitude(deg)", 0)
+    set_property(HW.galvo_a_label, "SingleAxisXOffset(deg)", 0)
+    #set_property(HW.piezo_a_label, "SingleAxisAmplitude(um)", 0.0)
+    # set_property(HW.piezo_a_label, "SingleAxisOffset(um)", piezo_fixed_pos_um)
+    #set_property(HW.piezo_a_label, "SPIMNumSlices", num_slices_ctrl)
+    print('=== Initial SPIMState ===')
+    print(f"{HW.piezo_a_label} SPIMState: {get_property(HW.piezo_a_label, 'SPIMState')}")
+    print(f"{HW.galvo_a_label} SPIMState: {get_property(HW.galvo_a_label, 'SPIMState')}")
+    set_property(HW.piezo_a_label, "SPIMState", "Idle")
+    #set_property(HW.galvo_a_label, "SPIMState", "Armed")
+    print('=== Armed SPIMState ===')
+    #print(f"{HW.piezo_a_label} SPIMState: {get_property(HW.piezo_a_label, 'SPIMState')}")
+    #print(f"{HW.galvo_a_label} SPIMState: {get_property(HW.galvo_a_label, 'SPIMState')}")
     print("DEBUG: All device properties set for this volume.")
 
 
 def trigger_slice_scan_acquisition():
     set_property(HW.galvo_a_label, "SPIMState", "Running")
+    print('=== Running SPIMState ===')
+    print(f"{HW.piezo_a_label} SPIMState: {get_property(HW.piezo_a_label, 'SPIMState')}")
+    print(f"{HW.galvo_a_label} SPIMState: {get_property(HW.galvo_a_label, 'SPIMState')}")
 
 
 def _reset_for_next_volume():
     print("Resetting controller state for next volume...")
     set_property(HW.galvo_a_label, "BeamEnabled", "No")
     set_property(HW.galvo_a_label, "SPIMState", "Idle")
-    set_property(HW.piezo_a_label, "SPIMState", "Idle")
+    set_property(HW.galvo_a_label, "SPIMState", "Idle")
 
 
 def final_cleanup(settings: AcquisitionSettings):
     print("Performing final cleanup...")
     _reset_for_next_volume()
-    set_property(HW.piezo_a_label, "SingleAxisOffset(um)", settings.piezo_center_um)
+    #set_property(HW.piezo_a_label, "SingleAxisOffset(um)", settings.piezo_center_um)
 
 
 # --- HardwareInterface Class ---
@@ -513,7 +546,7 @@ class AcquisitionGUI:
             self.volume_start_time = time.monotonic()
             trigger_slice_scan_acquisition()
             self.images_popped_this_volume = 0
-            self.root.after(20, self._poll_for_images)
+            self.root.after(100, self._poll_for_images)
         except Exception as e:
             print(f"Error starting volume: {e}")
             traceback.print_exc()
