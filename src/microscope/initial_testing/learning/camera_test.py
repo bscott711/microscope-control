@@ -15,6 +15,7 @@ from qtpy.QtWidgets import QGridLayout, QWidget
 # Create a QWidget class named MyWidget
 class MyWidget(QWidget):
     """An example QWidget that uses some of the widgets in pymmcore_widgets."""
+
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent=parent)
 

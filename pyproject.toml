@@ -36,6 +36,7 @@ dependencies = [
     "pyserial>=3.5",
     "pymmcore-widgets>=0.10.0",
     "magicgui>=0.10.1",
+    "tigerasi>=0.0.27",
 ]
 
 [project.optional-dependencies]
