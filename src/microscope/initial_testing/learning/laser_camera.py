@@ -1,54 +1,80 @@
-# filename: final_validate_script_v14.py
+# filename: final_validate_script_v18.py
 """
-FINAL v14 Phase 1: Complete Hardware Validation (Laser Enable Command)
+FINAL v18 Phase 1: Complete Hardware Validation (Card-Addressed Triggers)
 
-This script adds the critical 'LED X=1' command to enable the logical laser
-output before the scan begins. This should resolve the issue of the camera
-firing while the laser does not.
+This script corrects a deadlock bug by explicitly addressing the TTL trigger
+and master RM commands to the PLogic card. This ensures the card is correctly
+configured to listen for the ring buffer triggers and start the sequence.
 """
 
 import logging
 import time
 
 from pymmcore_plus import CMMCorePlus
+from tigerasi.device_codes import RingBufferMode, TTLIn0Mode
 
 # --- Configuration ---
 CONFIG = {
     "mmc_config_file": "hardware_profiles/20250523-OPM.cfg",
     "tiger_comm_hub_label": "TigerCommHub",
     "camera_device_label": "Camera-1",
-    "scanner_card_address": "33",
-    "scan_fast_axis": "A",
-    "scan_slow_axis": "B",
+    "plogic_card_address": "36",
+    # Ring Buffer and axis settings
+    "galvo_z_axis": "A",
+    # PLogic addresses and cell assignments
+    "plogic_rb_trigger_addr": 1,
+    "plogic_4khz_clock_addr": 192,
+    "plogic_laser_action_cell": 10,
+    "plogic_camera_action_cell": 11,
+    "plogic_laser_output_addr": 45,
+    "plogic_camera_output_addr": 44,
     # Acquisition settings
     "num_slices": 3,
-    "step_size_um": 1.0,
-    "z_center_um": 50.0,
     "exposure_time_ms": 10.0,
+    "z_center_um": 50.0,
+    "step_size_um": 1.0,
+    # System clock
+    "clock_frequency_hz": 4000,
     # Calibration
-    "slice_calibration_um_per_deg": 100.0,
+    "slice_calibration_um_per_axis_unit": 0.1,
 }
 
 
-class ScanState:
-    """State codes for the card-addressed 'SCAN X=...' command."""
-
-    START = 83
-    STOP = 80
-    ARM = 97
+# --- PLogic Cell Type Codes ---
+class PLogicCellType:
+    ONE_SHOT_NON_RETRIGGERABLE = 14
 
 
+# --- Helper Functions ---
 def send_tiger_command(mmc: CMMCorePlus, command: str):
     """Sends a raw serial command string to the Tiger controller."""
     hub_label = CONFIG["tiger_comm_hub_label"]
     mmc.setProperty(hub_label, "SerialCommand", command)
-    time.sleep(0.02)
+    time.sleep(0.05)
+
+
+def program_plogic_output_cell(
+    mmc: CMMCorePlus,
+    cell_num: int,
+    pulse_duration_ticks: int,
+    trigger_input_addr: int,
+    output_addr: int,
+):
+    """Programs a PLogic cell to fire a physical TTL output."""
+    plogic_addr = CONFIG["plogic_card_address"]
+    clock_addr = CONFIG["plogic_4khz_clock_addr"]
+    logging.info(f"  Programming Output Cell {cell_num} for TTL Addr {output_addr}...")
+    send_tiger_command(mmc, f"M E={cell_num}")
+    send_tiger_command(mmc, f"{plogic_addr}CCA Y={PLogicCellType.ONE_SHOT_NON_RETRIGGERABLE}")
+    send_tiger_command(mmc, f"{plogic_addr}CCA Z={pulse_duration_ticks}")
+    send_tiger_command(mmc, f"{plogic_addr}CCB X={trigger_input_addr} Y={clock_addr}")
+    send_tiger_command(mmc, f"{plogic_addr}CCA F={output_addr}")
 
 
 # --- Main Script ---
 def main():
     """Main validation function."""
-    print("--- FINAL v14 Phase 1: Laser Enable Validation ---")
+    print("--- FINAL v18 Phase 1: Card-Addressed Trigger Validation ---")
     mmc = CMMCorePlus.instance()
     original_camera_trigger_mode = ""
     cam_label = CONFIG["camera_device_label"]
@@ -61,76 +87,85 @@ def main():
         print(f"Setting camera to 'Level Trigger' mode (was '{original_camera_trigger_mode}')...")
         mmc.setProperty(cam_label, "TriggerMode", "Level Trigger")
 
-        # --- 2. Configure Galvo Scan & Pulse Durations ---
-        print("\n--- Configuring SPIM Firmware via High-Level Commands---")
-        scanner_addr = CONFIG["scanner_card_address"]
+        # --- 2. Calculate Parameters ---
+        pulses_per_ms = CONFIG["clock_frequency_hz"] / 1000.0
+        duration_ticks = int(CONFIG["exposure_time_ms"] * pulses_per_ms)
+        z_center_units = CONFIG["z_center_um"] / CONFIG["slice_calibration_um_per_axis_unit"]
+        step_size_units = CONFIG["step_size_um"] / CONFIG["slice_calibration_um_per_axis_unit"]
         num_slices = CONFIG["num_slices"]
-        fast_axis = CONFIG["scan_fast_axis"]
-        slow_axis = CONFIG["scan_slow_axis"]  # noqa: F841
-        exposure_ms = CONFIG["exposure_time_ms"]
+        start_pos = z_center_units - (step_size_units * (num_slices - 1) / 2)
+        z_positions = [int(round(start_pos + i * step_size_units)) for i in range(num_slices)]
+        print(f"\nCalculated Z-Positions (axis units): {z_positions}")
 
-        # A) Calculate and set the physical scan dimensions
-        total_scan_range_um = (num_slices - 1) * CONFIG["step_size_um"]
-        scan_amplitude_deg = total_scan_range_um / CONFIG["slice_calibration_um_per_deg"]
-        scan_offset_deg = 0
+        # --- 3. Program PLogic Card for Explicit Output Control ---
+        print("\n--- Configuring PLogic Card for Direct TTL Output ---")
+        program_plogic_output_cell(
+            mmc=mmc,
+            cell_num=CONFIG["plogic_laser_action_cell"],
+            pulse_duration_ticks=duration_ticks,
+            trigger_input_addr=CONFIG["plogic_rb_trigger_addr"],
+            output_addr=CONFIG["plogic_laser_output_addr"],
+        )
+        program_plogic_output_cell(
+            mmc=mmc,
+            cell_num=CONFIG["plogic_camera_action_cell"],
+            pulse_duration_ticks=duration_ticks,
+            trigger_input_addr=CONFIG["plogic_rb_trigger_addr"],
+            output_addr=CONFIG["plogic_camera_output_addr"],
+        )
+        print("PLogic programming complete.")
 
-        send_tiger_command(mmc, f"{scanner_addr}SAA {fast_axis}={scan_amplitude_deg}")
-        send_tiger_command(mmc, f"{scanner_addr}SAO {fast_axis}={scan_offset_deg}")
+        # --- 4. Configure and Load Ring Buffer ---
+        print("\nConfiguring and loading Ring Buffer...")
+        z_axis = CONFIG["galvo_z_axis"]
+        plogic_addr = CONFIG["plogic_card_address"]
+        send_tiger_command(mmc, "RM X=0")
+        send_tiger_command(mmc, f"RM Y={z_axis} F={RingBufferMode.TTL.value}")
+        for pos in z_positions:
+            send_tiger_command(mmc, f"LD {z_axis}={pos}")
 
-        # B) Set the number of slices for the SPIM routine
-        send_tiger_command(mmc, f"{scanner_addr}NR Y={num_slices}")
+        # == BUG FIX ==
+        # The TTL command MUST be addressed to the PLogic card that will
+        # be receiving the trigger signal.
+        print(f"Arming PLogic card (addr {plogic_addr}) for Ring Buffer triggers...")
+        ttl_command = f"{plogic_addr}TTL X={TTLIn0Mode.MOVE_TO_NEXT_ABS_POSITION.value}"
+        send_tiger_command(mmc, ttl_command)
+        print("Ring Buffer loaded and PLogic armed.")
 
-        # C) Use the RT command to explicitly set laser and camera pulse durations
-        print(f"Setting laser and camera pulse durations to {exposure_ms} ms using RT command...")
-        send_tiger_command(mmc, f"{scanner_addr}RT R={exposure_ms} T={exposure_ms}")
-
-        # D) == BUG FIX ==
-        # Use the LED command to enable the "Side0" logical laser output.
-        print("Enabling logical laser output...")
-        send_tiger_command(mmc, f"{scanner_addr}LED X=1")
-
-        print("SPIM firmware fully configured.")
-
-        # --- 3. Execute Galvo SPIM Scan ---
+        # --- 5. Execute Sequence ---
         print("\n--- EXECUTION ---")
-        print("Arming scanner...")
-        send_tiger_command(mmc, f"{scanner_addr}SCAN X={ScanState.ARM}")
-
         mmc.startSequenceAcquisition(cam_label, num_slices, 0, True)
 
-        print("Triggering armed scan...")
-        send_tiger_command(mmc, f"{scanner_addr}SCAN X={ScanState.START}")
+        # == BUG FIX ==
+        # The master trigger (RM) should also be addressed to the PLogic card
+        # to ensure the correct module is triggered.
+        print(f"Issuing master trigger (RM) to PLogic card {plogic_addr}...")
+        send_tiger_command(mmc, f"{plogic_addr}RM")
 
         while mmc.isSequenceRunning(cam_label):
-            print(f"Acquisition running... Images in buffer: {mmc.getRemainingImageCount()}", end="\r")
             time.sleep(0.5)
 
         images_received = mmc.getRemainingImageCount()
         for _ in range(images_received):
             mmc.popNextImage()
-
         print(f"\nHardware sequence finished. Final images received: {images_received}")
 
     except Exception as e:
         print(f"\nAn error occurred: {e}")
         logging.error("Exception occurred", exc_info=True)
     finally:
-        # --- 4. Cleanup ---
+        # --- 6. Cleanup ---
         print("\n--- Performing Cleanup ---")
         if mmc.getLoadedDevices():
-            scanner_addr = CONFIG["scanner_card_address"]
-            # Disable the logical laser and stop the scan
-            send_tiger_command(mmc, f"{scanner_addr}LED X=0")
-            send_tiger_command(mmc, f"{scanner_addr}SCAN X={ScanState.STOP}")
+            send_tiger_command(mmc, "RM X=0")
             if mmc.isSequenceRunning():
                 mmc.stopSequenceAcquisition()
             if original_camera_trigger_mode and mmc.hasProperty(cam_label, "TriggerMode"):
-                print(f"Resetting camera trigger mode to '{original_camera_trigger_mode}'...")
                 mmc.setProperty(cam_label, "TriggerMode", original_camera_trigger_mode)
             mmc.reset()
             print("System reset and unloaded.")
 
-    print("\n--- FINAL v14 Validation Script Complete ---")
+    print("\n--- FINAL v18 Validation Script Complete ---")
 
 
 if __name__ == "__main__":

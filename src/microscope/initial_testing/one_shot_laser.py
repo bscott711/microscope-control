@@ -25,17 +25,17 @@ class AcquisitionSettings:
     step_size_um: float = 1.0
     piezo_center_um: float = -31.0
     laser_trig_duration_ms: float = 10.0
-    delay_before_camera_ms: float = 18.0
+    delay_before_camera_ms: float = 0.0#18.0
 
     @property
     def camera_exposure_ms(self) -> float:
         """Derived camera exposure time."""
-        return self.laser_trig_duration_ms + 1.95
+        return self.laser_trig_duration_ms #+ 1.95
 
     @property
     def delay_before_laser_ms(self) -> float:
         """Derived laser delay time."""
-        return self.delay_before_camera_ms + 1.25
+        return self.delay_before_camera_ms #+ 1.25
 
 
 @dataclass
@@ -69,7 +69,7 @@ class HardwareConstants:
     num_sides: int = 1
     first_side_is_a: bool = True
     scan_opposite_directions: bool = False
-    sheet_width_deg: float = 0.5
+    sheet_width_deg: float = 0.0
     sheet_offset_deg: float = 0.0
     delay_before_side_ms: float = 0.0
     camera_mode_is_overlap: bool = False
@@ -106,15 +106,10 @@ def configure_plogic_for_one_shot_laser(settings: AcquisitionSettings):
     pulse_duration_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
     _execute_tiger_serial_command(f"CCA Z={pulse_duration_cycles}")
     _execute_tiger_serial_command(f"CCB X={HW.plogic_camera_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
-    _execute_tiger_serial_command(f"M E={HW.plogic_delay_before_laser_cell}")
-    _execute_tiger_serial_command("CCA Y=13")
-    delay_cycles = int(settings.delay_before_laser_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"CCA Z={delay_cycles}")
-    _execute_tiger_serial_command(f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
+
     _execute_tiger_serial_command(f"M E={HW.plogic_delay_before_camera_cell}")
-    _execute_tiger_serial_command("CCA Y=13")
-    delay_cycles = int(settings.delay_before_camera_ms * HW.pulses_per_ms)
-    _execute_tiger_serial_command(f"CCA Z={delay_cycles}")
+    _execute_tiger_serial_command("CCA Y=14")
+    _execute_tiger_serial_command(f"CCA Z={pulse_duration_cycles}")
     _execute_tiger_serial_command(f"CCB X={HW.plogic_galvo_trigger_ttl_addr} Y={HW.plogic_4khz_clock_addr}")
 
 
@@ -407,6 +402,19 @@ class AcquisitionGUI:
     def start_time_series(self):
         if self.acquisition_in_progress:
             return
+
+        # Explicitly update all settings from GUI variables just before starting.
+        # This ensures the most current values are used for the acquisition.
+        try:
+            self.settings.num_slices = self.num_slices_var.get()
+            self.settings.step_size_um = self.step_size_var.get()
+            self.settings.laser_trig_duration_ms = self.laser_duration_var.get()
+            self.time_points_total = self.num_time_points_var.get()
+        except (tk.TclError, ValueError):
+            self.status_var.set("Error: Invalid value in one of the input fields.")
+            print("Could not start acquisition due to an invalid numerical input.")
+            return
+
         self.acquisition_in_progress = True
         self.cancel_requested = False
         self.run_button.grid_remove()
@@ -419,10 +427,9 @@ class AcquisitionGUI:
         except Exception:
             self.pixel_size_um = 1.0
             print("Warning: Could not get pixel size. Defaulting to 1.0 µm.")
-        self.settings.step_size_um = self.step_size_var.get()
-        self.time_points_total = self.num_time_points_var.get()
+
         self.current_time_point = 0
-        self._update_all_estimates()
+        self._update_all_estimates()  # Update display labels based on final settings
         print("\n--- Starting Time Series ---")
         self._start_next_volume()
 
@@ -438,7 +445,13 @@ class AcquisitionGUI:
                 self.images_expected_per_volume,
             ) = calculate_galvo_parameters(self.settings)
             mmc.setCameraDevice(self.hw_interface.camera1)
-            if not self.hw_interface.find_and_set_trigger_mode(self.hw_interface.camera1, ["Edge Trigger", "External"]):
+            if not self.hw_interface.find_and_set_trigger_mode(
+                self.hw_interface.camera1,
+                [
+                    "Level Trigger",
+                    "Edge Trigger",
+                ],
+            ):
                 raise RuntimeError("Failed to set external trigger mode.")
             configure_devices_for_slice_scan(self.settings, galvo_amp, galvo_center, self.images_expected_per_volume)
             mmc.setExposure(self.hw_interface.camera1, self.settings.camera_exposure_ms)
@@ -541,7 +554,7 @@ class AcquisitionGUI:
         else:
             print("\n--- Time Series Complete ---")
         final_cleanup(self.settings)
-        self.hw_interface.find_and_set_trigger_mode(self.hw_interface.camera1, ["Internal", "Internal Trigger"])
+        self.hw_interface.find_and_set_trigger_mode(self.hw_interface.camera1, ["Internal Trigger"])
         self.acquisition_in_progress = False
         self.run_button.grid()
         self.cancel_button.grid_remove()
