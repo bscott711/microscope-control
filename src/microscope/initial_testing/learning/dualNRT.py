@@ -23,7 +23,6 @@ class AcquisitionSettings:
 
     num_slices: int = 3
     step_size_um: float = 1.0
-    piezo_center_um: float = -31.0
     laser_trig_duration_ms: float = 10.0
     camera_exposure_ms: float = 10.0
 
@@ -46,21 +45,14 @@ class HardwareConstants:
     plogic_camera_cell: int = 11
     pulses_per_ms: float = 4.0
     # Laser Preset Configuration
-    plogic_laser_preset_num: int = 30 #5
+    plogic_laser_preset_num: int = 30
     # Calibration
     slice_calibration_slope_um_per_deg: float = 100.0
-    slice_calibration_offset_um: float = 0.0
     # Timing Parameters
     delay_before_scan_ms: float = 0.0
     line_scans_per_slice: int = 1
     line_scan_duration_ms: float = 1.0
-    num_sides: int = 1
-    first_side_is_a: bool = True
-    scan_opposite_directions: bool = False
-    sheet_width_deg: float = 0.0
-    sheet_offset_deg: float = 0.0
     delay_before_side_ms: float = 0.0
-    camera_mode_is_overlap: bool = False
 
 
 # Instantiate constants
@@ -119,6 +111,7 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
     CCB X=41 Y=128          # Set inputs: TTL41 (Tiger Comm Hub TTL0) and 4kHz clock
     ```
     """
+
     plogic_addr_prefix = HW.plogic_label.split(":")[-1]
     hub_label = HW.tiger_comm_hub_label
     hub_prop = "OnlySendSerialCommandOnChange"
@@ -174,50 +167,37 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
+    """Converts the slice from um to degrees using the galvo calibration slope."""
     if abs(HW.slice_calibration_slope_um_per_deg) < 1e-9:
         raise ValueError("Slice calibration slope cannot be zero.")
     num_slices_ctrl = settings.num_slices
-    piezo_amplitude_um = (num_slices_ctrl - 1) * settings.step_size_um
-    if HW.camera_mode_is_overlap:
-        if num_slices_ctrl > 1:
-            piezo_amplitude_um *= float(num_slices_ctrl) / (num_slices_ctrl - 1.0)
-        num_slices_ctrl += 1
-    galvo_slice_amplitude_deg = piezo_amplitude_um / HW.slice_calibration_slope_um_per_deg
-    galvo_slice_center_deg = (
-        settings.piezo_center_um - HW.slice_calibration_offset_um
-    ) / HW.slice_calibration_slope_um_per_deg
+    amplitude_um = (num_slices_ctrl - 1) * settings.step_size_um
+    galvo_slice_amplitude_deg = amplitude_um / HW.slice_calibration_slope_um_per_deg
     return (
         round(galvo_slice_amplitude_deg, 4),
-        round(galvo_slice_center_deg, 4),
         num_slices_ctrl,
     )
 
 
 def configure_devices_for_slice_scan(
-    settings: AcquisitionSettings,
     galvo_amplitude_deg: float,
-    galvo_center_deg: float,
     num_slices_ctrl: int,
 ):
     """Configures galvo and piezo for a single volume scan."""
     print("DEBUG: Configuring devices for new volume scan...")
-    # piezo_fixed_pos_um = round(settings.piezo_center_um, 3)  # noqa: F841
+
     set_property(HW.galvo_a_label, "BeamEnabled", "Yes")
 
     # PLogic configuration is now done only once at the start of the time-series.
-    # Setting galvo and piezo properties for the scan:
+    # Setting galvo properties for the scan:
     set_property(HW.galvo_a_label, "SPIMNumSlicesPerPiezo", HW.line_scans_per_slice)
     set_property(HW.galvo_a_label, "SPIMDelayBeforeRepeat(ms)", HW.delay_before_scan_ms)
     set_property(HW.galvo_a_label, "SPIMNumRepeats", 1)
     set_property(HW.galvo_a_label, "SPIMDelayBeforeSide(ms)", HW.delay_before_side_ms)
-    set_property(
-        HW.galvo_a_label,
-        "SPIMAlternateDirectionsEnable",
-        "Yes" if HW.scan_opposite_directions else "No",
-    )
+    set_property(HW.galvo_a_label, "SPIMAlternateDirectionsEnable", "No")
     set_property(HW.galvo_a_label, "SPIMScanDuration(ms)", HW.line_scan_duration_ms)
     set_property(HW.galvo_a_label, "SingleAxisYAmplitude(deg)", galvo_amplitude_deg)
-    set_property(HW.galvo_a_label, "SingleAxisYOffset(deg)", 0) #galvo_center_deg)
+    set_property(HW.galvo_a_label, "SingleAxisYOffset(deg)", 0)
     set_property(HW.galvo_a_label, "SPIMNumSlices", num_slices_ctrl)
     set_property(HW.galvo_a_label, "SPIMNumSides", 1)
     set_property(HW.galvo_a_label, "SPIMFirstSide", "A")
@@ -225,24 +205,12 @@ def configure_devices_for_slice_scan(
     set_property(HW.galvo_a_label, "SPIMInterleaveSidesEnable", "No")
     set_property(HW.galvo_a_label, "SingleAxisXAmplitude(deg)", 0)
     set_property(HW.galvo_a_label, "SingleAxisXOffset(deg)", 0)
-    #set_property(HW.piezo_a_label, "SingleAxisAmplitude(um)", 0.0)
-    # set_property(HW.piezo_a_label, "SingleAxisOffset(um)", piezo_fixed_pos_um)
-    #set_property(HW.piezo_a_label, "SPIMNumSlices", num_slices_ctrl)
-    print('=== Initial SPIMState ===')
-    print(f"{HW.piezo_a_label} SPIMState: {get_property(HW.piezo_a_label, 'SPIMState')}")
-    print(f"{HW.galvo_a_label} SPIMState: {get_property(HW.galvo_a_label, 'SPIMState')}")
-    set_property(HW.piezo_a_label, "SPIMState", "Idle")
-    #set_property(HW.galvo_a_label, "SPIMState", "Armed")
-    print('=== Armed SPIMState ===')
-    #print(f"{HW.piezo_a_label} SPIMState: {get_property(HW.piezo_a_label, 'SPIMState')}")
-    #print(f"{HW.galvo_a_label} SPIMState: {get_property(HW.galvo_a_label, 'SPIMState')}")
     print("DEBUG: All device properties set for this volume.")
 
 
 def trigger_slice_scan_acquisition():
     set_property(HW.galvo_a_label, "SPIMState", "Running")
     print('=== Running SPIMState ===')
-    print(f"{HW.piezo_a_label} SPIMState: {get_property(HW.piezo_a_label, 'SPIMState')}")
     print(f"{HW.galvo_a_label} SPIMState: {get_property(HW.galvo_a_label, 'SPIMState')}")
 
 
@@ -250,13 +218,11 @@ def _reset_for_next_volume():
     print("Resetting controller state for next volume...")
     set_property(HW.galvo_a_label, "BeamEnabled", "No")
     set_property(HW.galvo_a_label, "SPIMState", "Idle")
-    set_property(HW.galvo_a_label, "SPIMState", "Idle")
 
 
-def final_cleanup(settings: AcquisitionSettings):
+def final_cleanup():
     print("Performing final cleanup...")
     _reset_for_next_volume()
-    #set_property(HW.piezo_a_label, "SingleAxisOffset(um)", settings.piezo_center_um)
 
 
 # --- HardwareInterface Class ---
@@ -347,7 +313,7 @@ class AcquisitionGUI:
         self.images_popped_this_volume = 0
         self.volume_start_time = 0.0
         self.current_volume_images = []
-        self.pixel_size_um = 1.0
+        self.pixel_size_um = 0.128
 
         self.create_widgets()
         self._bind_traces()
@@ -505,8 +471,8 @@ class AcquisitionGUI:
             self.pixel_size_um = mmc.getPixelSizeUm()
             print(f"Using pixel size for metadata: {self.pixel_size_um:.3f} µm")
         except Exception:
-            self.pixel_size_um = 1.0
-            print("Warning: Could not get pixel size. Defaulting to 1.0 µm.")
+            self.pixel_size_um = 0.128
+            print("Warning: Could not get pixel size. Defaulting to 0.128 µm.")
 
         # Configure the PLogic card ONCE at the beginning of the whole series.
         print("\n--- Performing One-Time PLogic Configuration ---")
@@ -526,7 +492,6 @@ class AcquisitionGUI:
         try:
             (
                 galvo_amp,
-                galvo_center,
                 self.images_expected_per_volume,
             ) = calculate_galvo_parameters(self.settings)
             mmc.setCameraDevice(self.hw_interface.camera1)
@@ -535,9 +500,7 @@ class AcquisitionGUI:
             ):
                 raise RuntimeError("Failed to set external trigger mode.")
             configure_devices_for_slice_scan(
-                self.settings,
                 galvo_amp,
-                galvo_center,
                 self.images_expected_per_volume,
             )
             mmc.setExposure(self.hw_interface.camera1, self.settings.camera_exposure_ms)
@@ -639,7 +602,7 @@ class AcquisitionGUI:
             print("\n--- Acquisition Cancelled by User ---")
         else:
             print("\n--- Time Series Complete ---")
-        final_cleanup(self.settings)
+        final_cleanup()
         self.hw_interface.find_and_set_trigger_mode(self.hw_interface.camera1, ["Internal Trigger"])
         self.acquisition_in_progress = False
         self.run_button.grid()
