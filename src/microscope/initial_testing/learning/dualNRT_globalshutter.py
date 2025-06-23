@@ -43,6 +43,8 @@ class HardwareConstants:
     plogic_4khz_clock_addr: int = 192
     plogic_laser_on_cell: int = 10
     plogic_camera_cell: int = 11
+    plogic_always_on_cell: int = 12  # New: Cell for static "microscope on" signal
+    plogic_bnc3_addr: int = 35  # New: Address for BNC3 connector
     pulses_per_ms: float = 4.0
     # Laser Preset Configuration
     plogic_laser_preset_num: int = 30
@@ -89,7 +91,8 @@ def get_property(device_label: str, property_name: str) -> str | None:
 
 def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
     """
-    Configures PLogic to generate two independent, synchronized NRT one-shot pulses.
+    Configures PLogic to generate two independent, synchronized NRT one-shot pulses
+    for camera and laser, and a static "microscope on" signal on BNC3.
     This version sends all serial commands in a single, efficient batch.
 
     There are 4 main steps:
@@ -97,21 +100,12 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
     2. Select the type of cell.
     3. Set the cell configuration parameters.
     4. Set the cell inputs.
-
-    An example command sequence to configure cell 10 for a One Shot NRT pulse off the Tiger
-    Backplane TTL0 and clocked by the 4kHz Tiger Clock:
-    ```
-    M E=10                  # Move to cell 10
-    CCA Y=14                # Set cell type to NRT One-Shot
-    CCA Z=40                # Set duration to 40 cycles (10ms)
-    CCB X=41 Y=128          # Set inputs: TTL41 (Tiger Comm Hub TTL0) and 4kHz clock
-    ```
     """
 
     plogic_addr_prefix = HW.plogic_label.split(":")[-1]
     hub_label = HW.tiger_comm_hub_label
     hub_prop = "OnlySendSerialCommandOnChange"
-    original_hub_setting = mmc.getProperty(hub_label, hub_prop)
+    original_hub_setting = get_property(hub_label, hub_prop)
 
     def _send(cmd: str):
         """Internal helper to send a command and sleep."""
@@ -121,15 +115,14 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
     try:
         # Set hub to send all commands regardless of change
         if original_hub_setting == "Yes":
-            mmc.setProperty(hub_label, hub_prop, "No")
+            set_property(hub_label, hub_prop, "No")
 
         # --- Batch PLogic Configuration ---
         # 0. Reset PLogic
         _send(f"{plogic_addr_prefix}CCA X=0")  # Reset all cells
 
-        # 1. Program Laser Preset and Laser Indicator
+        # 1. Program Laser Preset
         _send(f"{plogic_addr_prefix}CCA X={HW.plogic_laser_preset_num}")
-        _send(f"{plogic_addr_prefix}CCA X=27")  # This will turn on the laser indicator (BNC3)
         print(f"Laser preset number: {HW.plogic_laser_preset_num}")
 
         # 2. Program Camera Pulse (NRT One-Shot #1)
@@ -148,18 +141,29 @@ def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
         _send(f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}")  # Set duration
         _send(f"{plogic_addr_prefix}CCB X={trigger} Y={clock_source} Z=0")
 
-        # 4. Route Cell Outputs to BNCs
-        _send("M E=33")  # Point to BNC1
-        _send(f"{plogic_addr_prefix}CCA Z={HW.plogic_camera_cell}")
+        # 4. Program "Microscope On" Indicator Cell
+        _send(f"M E={HW.plogic_always_on_cell}")  # Point to our new cell
+        _send(f"{plogic_addr_prefix}CCA Y=0")  # Type: Combinatorial Logic
+        _send(f"{plogic_addr_prefix}CCA Z=5")  # Logic: (A|B)|(C|D)
+        _send(f"{plogic_addr_prefix}CCB X=1")  # Input A = Vlogic (always high)
+        print("Set BNC3 to HIGH (Global Shutter On)")
 
-        # 5. Save the configuration
+        # 5. Route Cell Outputs to BNCs
+        # Route camera cell (pulsed) to BNC1
+        _send("M E=33")
+        _send(f"{plogic_addr_prefix}CCA Z={HW.plogic_camera_cell}")
+        # Route "always on" cell (static) to BNC3
+        _send(f"M E={HW.plogic_bnc3_addr}")
+        _send(f"{plogic_addr_prefix}CCA Z={HW.plogic_always_on_cell}")
+
+        # 6. Save the configuration
         _send(f"{plogic_addr_prefix}SS Z")  # Save configuration to non-volatile memory
-        print("PLogic configured for dual NRT pulses successfully.")
+        print("PLogic configured for dual NRT pulses and static 'on' signal.")
 
     finally:
         # IMPORTANT: Always restore the original hub setting
         if original_hub_setting == "Yes":
-            mmc.setProperty(hub_label, hub_prop, "Yes")
+            set_property(hub_label, hub_prop, "Yes")
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -217,8 +221,36 @@ def _reset_for_next_volume():
 
 
 def final_cleanup():
+    """Resets devices and turns off microscope-on indicator."""
     print("Performing final cleanup...")
     _reset_for_next_volume()
+
+    # Turn off the BNC3 "microscope on" indicator signal by routing it to GND
+    try:
+        if HW.plogic_label in mmc.getLoadedDevices():
+            plogic_addr_prefix = HW.plogic_label.split(":")[-1]
+            hub_label = HW.tiger_comm_hub_label
+            hub_prop = "OnlySendSerialCommandOnChange"
+            original_hub_setting = get_property(hub_label, hub_prop)
+
+            # Temporarily set hub to send all commands
+            if original_hub_setting == "Yes":
+                set_property(hub_label, hub_prop, "No")
+
+            # Send commands to route BNC3 output to GND (address 0)
+            mmc.setProperty(hub_label, "SerialCommand", f"M E={HW.plogic_bnc3_addr}")
+            time.sleep(0.01)
+            mmc.setProperty(hub_label, "SerialCommand", f"{plogic_addr_prefix}CCA Z=0")
+            time.sleep(0.01)
+            print("Set BNC3 to LOW (Global Shutter Off)")
+
+            # Restore original hub setting
+            if original_hub_setting == "Yes":
+                set_property(hub_label, hub_prop, "Yes")
+        else:
+            print("PLogic device not found, cannot set BNC3 to low.")
+    except Exception as e:
+        print(f"Warning: Could not set BNC3 to LOW during cleanup. Error: {e}")
 
 
 # --- HardwareInterface Class ---
@@ -647,5 +679,6 @@ if __name__ == "__main__":
         traceback.print_exc()
     finally:
         if "mmc" in locals() and mmc.getLoadedDevices():
+            final_cleanup()  # Ensure cleanup is called before reset
             mmc.reset()
         print("Script execution finished.")

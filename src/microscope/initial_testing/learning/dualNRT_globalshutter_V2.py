@@ -43,6 +43,8 @@ class HardwareConstants:
     plogic_4khz_clock_addr: int = 192
     plogic_laser_on_cell: int = 10
     plogic_camera_cell: int = 11
+    plogic_always_on_cell: int = 12  # Cell for static "microscope on" signal
+    plogic_bnc3_addr: int = 35  # Address for BNC3 connector
     pulses_per_ms: float = 4.0
     # Laser Preset Configuration
     plogic_laser_preset_num: int = 30
@@ -87,79 +89,134 @@ def get_property(device_label: str, property_name: str) -> str | None:
     return None
 
 
-def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
+def _send_tiger_command(cmd: str):
+    """Internal helper to send a serial command to the Tiger controller."""
+    if HW.tiger_comm_hub_label in mmc.getLoadedDevices():
+        mmc.setProperty(HW.tiger_comm_hub_label, "SerialCommand", cmd)
+        time.sleep(0.01)
+    else:
+        print(f"Warning: TigerCommHub not found. Cannot send command: {cmd}")
+
+
+def open_global_shutter():
     """
-    Configures PLogic to generate two independent, synchronized NRT one-shot pulses.
-    This version sends all serial commands in a single, efficient batch.
+    Configures and opens a global shutter on PLogic BNC3.
 
-    There are 4 main steps:
-    1. Move the axis position to the cell.
-    2. Select the type of cell.
-    3. Set the cell configuration parameters.
-    4. Set the cell inputs.
-
-    An example command sequence to configure cell 10 for a One Shot NRT pulse off the Tiger
-    Backplane TTL0 and clocked by the 4kHz Tiger Clock:
-    ```
-    M E=10                  # Move to cell 10
-    CCA Y=14                # Set cell type to NRT One-Shot
-    CCA Z=40                # Set duration to 40 cycles (10ms)
-    CCB X=41 Y=128          # Set inputs: TTL41 (Tiger Comm Hub TTL0) and 4kHz clock
-    ```
+    This function programs a PLogic cell to be constantly high and routes it
+    to the BNC3 output. This serves as a "microscope on" or global shutter signal.
     """
-
+    print("Opening global shutter (BNC3 HIGH)...")
     plogic_addr_prefix = HW.plogic_label.split(":")[-1]
     hub_label = HW.tiger_comm_hub_label
     hub_prop = "OnlySendSerialCommandOnChange"
-    original_hub_setting = mmc.getProperty(hub_label, hub_prop)
-
-    def _send(cmd: str):
-        """Internal helper to send a command and sleep."""
-        mmc.setProperty(hub_label, "SerialCommand", cmd)
-        time.sleep(0.01)  # Short sleep to allow command processing
+    original_hub_setting = get_property(hub_label, hub_prop)
 
     try:
-        # Set hub to send all commands regardless of change
         if original_hub_setting == "Yes":
-            mmc.setProperty(hub_label, hub_prop, "No")
+            set_property(hub_label, hub_prop, "No")
 
-        # --- Batch PLogic Configuration ---
-        # 0. Reset PLogic
-        _send(f"{plogic_addr_prefix}CCA X=0")  # Reset all cells
+        _send_tiger_command(f"{plogic_addr_prefix}CCA X=0")
 
-        # 1. Program Laser Preset and Laser Indicator
+        # Program a PLogic cell to output a constant HIGH signal
+        _send_tiger_command(f"M E={HW.plogic_always_on_cell}")
+        _send_tiger_command(f"{plogic_addr_prefix}CCA Y=0")
+        _send_tiger_command(f"{plogic_addr_prefix}CCA Z=5")
+        _send_tiger_command(f"{plogic_addr_prefix}CCB X=1")
+
+        # Route the "always on" cell's output to BNC3
+        _send_tiger_command(f"M E={HW.plogic_bnc3_addr}")
+        _send_tiger_command(f"{plogic_addr_prefix}CCA Z={HW.plogic_always_on_cell}")
+
+        _send_tiger_command(f"{plogic_addr_prefix}SS Z")
+        print("Global shutter is open (BNC3 is HIGH).")
+
+    except Exception as e:
+        print(f"Error opening global shutter: {e}")
+    finally:
+        if original_hub_setting == "Yes":
+            set_property(hub_label, hub_prop, "Yes")
+
+
+def close_global_shutter():
+    """
+    Closes the global shutter on PLogic BNC3.
+
+    This function routes the BNC3 output to GND, effectively setting it to LOW.
+    """
+    print("Closing global shutter (BNC3 LOW)...")
+    plogic_addr_prefix = HW.plogic_label.split(":")[-1]
+    hub_label = HW.tiger_comm_hub_label
+    hub_prop = "OnlySendSerialCommandOnChange"
+    original_hub_setting = get_property(hub_label, hub_prop)
+
+    try:
+        if HW.plogic_label not in mmc.getLoadedDevices():
+            print("PLogic device not found, cannot close shutter.")
+            return
+
+        if original_hub_setting == "Yes":
+            set_property(hub_label, hub_prop, "No")
+
+        # Route BNC3 output to GND (address 0) to set it LOW
+        _send_tiger_command(f"M E={HW.plogic_bnc3_addr}")
+        _send_tiger_command(f"{plogic_addr_prefix}CCA Z=0")
+
+        _send_tiger_command(f"{plogic_addr_prefix}SS Z")
+        print("Global shutter is closed (BNC3 is LOW).")
+
+    except Exception as e:
+        print(f"Warning: Could not close global shutter. Error: {e}")
+    finally:
+        if original_hub_setting == "Yes" and get_property(hub_label, hub_prop) == "No":
+            set_property(hub_label, hub_prop, "Yes")
+
+
+def configure_plogic_for_dual_nrt_pulses(settings: AcquisitionSettings):
+    """
+    Configures PLogic to generate two independent, synchronized NRT one-shot pulses
+    for the camera and laser triggers.
+    """
+    plogic_addr_prefix = HW.plogic_label.split(":")[-1]
+    hub_label = HW.tiger_comm_hub_label
+    hub_prop = "OnlySendSerialCommandOnChange"
+    original_hub_setting = get_property(hub_label, hub_prop)
+    _send = _send_tiger_command
+
+    try:
+        if original_hub_setting == "Yes":
+            set_property(hub_label, hub_prop, "No")
+
+        # 1. Program Laser Preset
         _send(f"{plogic_addr_prefix}CCA X={HW.plogic_laser_preset_num}")
-        _send(f"{plogic_addr_prefix}CCA X=27")  # This will turn on the laser indicator (BNC3)
         print(f"Laser preset number: {HW.plogic_laser_preset_num}")
 
         # 2. Program Camera Pulse (NRT One-Shot #1)
-        _send(f"M E={HW.plogic_camera_cell}")  # Point to Camera Cell, 11
-        _send(f"{plogic_addr_prefix}CCA Y=14")  # Type: NRT one-shot
+        _send(f"M E={HW.plogic_camera_cell}")
+        _send(f"{plogic_addr_prefix}CCA Y=14")
         camera_pulse_cycles = int(settings.camera_exposure_ms * HW.pulses_per_ms)
-        _send(f"{plogic_addr_prefix}CCA Z={camera_pulse_cycles}")  # Set duration
+        _send(f"{plogic_addr_prefix}CCA Z={camera_pulse_cycles}")
         clock_source = HW.plogic_4khz_clock_addr
         trigger = HW.plogic_trigger_ttl_addr
         _send(f"{plogic_addr_prefix}CCB X={trigger} Y={clock_source} Z=0")
 
         # 3. Program Laser Pulse (NRT One-Shot #2)
         _send(f"M E={HW.plogic_laser_on_cell}")
-        _send(f"{plogic_addr_prefix}CCA Y=14")  # Type: NRT one-shot
+        _send(f"{plogic_addr_prefix}CCA Y=14")
         laser_pulse_cycles = int(settings.laser_trig_duration_ms * HW.pulses_per_ms)
-        _send(f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}")  # Set duration
+        _send(f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}")
         _send(f"{plogic_addr_prefix}CCB X={trigger} Y={clock_source} Z=0")
 
-        # 4. Route Cell Outputs to BNCs
-        _send("M E=33")  # Point to BNC1
+        # 4. Route Camera Trigger Cell Output to BNC1
+        _send("M E=33")
         _send(f"{plogic_addr_prefix}CCA Z={HW.plogic_camera_cell}")
 
         # 5. Save the configuration
-        _send(f"{plogic_addr_prefix}SS Z")  # Save configuration to non-volatile memory
-        print("PLogic configured for dual NRT pulses successfully.")
+        _send(f"{plogic_addr_prefix}SS Z")
+        print("PLogic configured for dual NRT pulses.")
 
     finally:
-        # IMPORTANT: Always restore the original hub setting
         if original_hub_setting == "Yes":
-            mmc.setProperty(hub_label, hub_prop, "Yes")
+            set_property(hub_label, hub_prop, "Yes")
 
 
 def calculate_galvo_parameters(settings: AcquisitionSettings):
@@ -181,11 +238,7 @@ def configure_devices_for_slice_scan(
 ):
     """Configures galvo and piezo for a single volume scan."""
     print("DEBUG: Configuring devices for new volume scan...")
-
     set_property(HW.galvo_a_label, "BeamEnabled", "Yes")
-
-    # PLogic configuration is now done only once at the start of the time-series.
-    # Setting galvo properties for the scan:
     set_property(HW.galvo_a_label, "SPIMNumSlicesPerPiezo", HW.line_scans_per_slice)
     set_property(HW.galvo_a_label, "SPIMDelayBeforeRepeat(ms)", HW.delay_before_scan_ms)
     set_property(HW.galvo_a_label, "SPIMNumRepeats", 1)
@@ -217,6 +270,7 @@ def _reset_for_next_volume():
 
 
 def final_cleanup():
+    """Performs final device cleanup, resetting scanner and galvo states."""
     print("Performing final cleanup...")
     _reset_for_next_volume()
 
@@ -407,7 +461,6 @@ class AcquisitionGUI:
             self.settings.num_slices = self.num_slices_var.get()
             self.settings.laser_trig_duration_ms = self.laser_duration_var.get()
             self.settings.camera_exposure_ms = self.camera_exposure_var.get()
-
             self.camera_exposure_display_var.set(f"{self.settings.camera_exposure_ms:.2f} ms")
             min_interval_s = self._calculate_minimal_interval()
             self.min_interval_display_var.set(f"{min_interval_s:.2f} s")
@@ -470,8 +523,8 @@ class AcquisitionGUI:
             self.pixel_size_um = 0.128
             print("Warning: Could not get pixel size. Defaulting to 0.128 µm.")
 
-        # Configure the PLogic card ONCE at the beginning of the whole series.
-        print("\n--- Performing One-Time PLogic Configuration ---")
+        # Configure PLogic for the acquisition triggers
+        print("\n--- Configuring PLogic for Acquisition ---")
         configure_plogic_for_dual_nrt_pulses(self.settings)
         print("--- PLogic Configuration Complete ---")
 
@@ -637,15 +690,35 @@ class AcquisitionGUI:
 
 if __name__ == "__main__":
     try:
+        # Initialize hardware first
         hw_main_interface = HardwareInterface(config_file_path=HW.cfg_path)
+
+        # Open the global shutter on startup
+        open_global_shutter()
+
+        # Build and run the GUI
         root = tk.Tk()
         root.minsize(600, 700)
         app = AcquisitionGUI(root, hw_main_interface)
+
+        # Define shutdown behavior
+        def on_closing():
+            print("GUI is closing...")
+            root.destroy()
+
+        root.protocol("WM_DELETE_WINDOW", on_closing)
         root.mainloop()
+
     except Exception as e_main:
         print(f"An unexpected error occurred in __main__: {e_main}")
         traceback.print_exc()
+
     finally:
+        # This block will run on normal exit or if an exception occurs
         if "mmc" in locals() and mmc.getLoadedDevices():
+            print("Shutting down...")
+            # Close the global shutter before performing final cleanup and reset
+            close_global_shutter()
+            final_cleanup()
             mmc.reset()
         print("Script execution finished.")
