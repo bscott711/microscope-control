@@ -45,7 +45,7 @@ dev = ["ruff"]
 
 # --- Entry Points & URLs ---
 [project.scripts]
-microscope-control = "microscope.ui.__main__:main"
+microscope-control = "microscope.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/bscott711/microscope-control"
