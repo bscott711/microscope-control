@@ -93,6 +93,40 @@ def close_global_shutter(plogic_label: str, tiger_comm_hub_label: str, plogic_bn
         if original_hub_setting == "Yes" and get_property(tiger_comm_hub_label, hub_prop) == "No":
             set_property(tiger_comm_hub_label, hub_prop, "Yes")
 
+def set_camera_trigger_mode(camera_label: str) -> bool:
+    """
+    Finds and sets the appropriate external trigger mode on the specified camera.
+
+    Args:
+        camera_label (str): The device label of the camera.
+
+    Returns:
+        bool: True if a valid trigger mode was set, False otherwise.
+    """
+    if camera_label not in mmc.getLoadedDevices():
+        print(f"Warning: Camera '{camera_label}' not found.")
+        return False
+
+    trigger_prop = "TriggerMode"
+    if not mmc.hasProperty(camera_label, trigger_prop):
+        print(f"Warning: Camera '{camera_label}' has no 'TriggerMode' property.")
+        return False
+
+    # List of desired trigger modes, in order of preference
+    desired_modes = ["Level Trigger", "Edge Trigger", "External"]
+    try:
+        allowed_modes = mmc.getAllowedPropertyValues(camera_label, trigger_prop)
+        for mode in desired_modes:
+            if mode in allowed_modes:
+                print(f"Setting '{camera_label}' trigger mode to '{mode}'")
+                mmc.setProperty(camera_label, trigger_prop, mode)
+                return True
+        print(f"Warning: Could not find a suitable trigger mode for '{camera_label}'")
+        return False
+    except Exception as e:
+        print(f"Error setting trigger mode for '{camera_label}': {e}")
+        return False
+
 
 def configure_plogic_for_dual_nrt_pulses(
     settings: "AcquisitionSettings",
