@@ -37,6 +37,7 @@ dependencies = [
     "pymmcore-widgets>=0.10.0",
     "magicgui>=0.10.1",
     "tigerasi>=0.0.27",
+    "pymmcore-gui @ git+https://github.com/pymmcore-plus/pymmcore-gui",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +56,9 @@ Homepage = "https://github.com/bscott711/microscope-control"
 # This explicitly tells Hatchling where to find the package,
 # resolving the auto-discovery mismatch.
 packages = ["src/microscope"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.ruff]
 # Set the minimum Python version to target for linting.

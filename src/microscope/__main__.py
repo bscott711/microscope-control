@@ -5,7 +5,6 @@ from pymmcore_gui import MicroManagerGUI
 from pymmcore_plus import CMMCorePlus
 from qtpy.QtWidgets import QApplication
 
-# Use absolute imports from the microscope package
 from microscope.asi_z_stack.asi_controller import (
     close_global_shutter,
     configure_plogic_for_dual_nrt_pulses,
@@ -23,11 +22,8 @@ def main():
     try:
         mmc.loadSystemConfiguration(HW.cfg_path)
         print(f"Successfully loaded system configuration: {HW.cfg_path}")
-        mmc.setProperty("Core", "FocusDevice", HW.piezo_a_label)
-        print(f"Set 'Core-FocusDevice' to: {HW.piezo_a_label}")
 
     except Exception as e:
-        # This block prevents the app from crashing if the config fails to load.
         print(f"\n--- CONFIGURATION ERROR ---\n{e}\n---------------------------\n")
         print("Loading demo configuration instead. The GUI will still open.")
         mmc.loadSystemConfiguration()
