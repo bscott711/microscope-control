@@ -93,6 +93,7 @@ def close_global_shutter(plogic_label: str, tiger_comm_hub_label: str, plogic_bn
         if original_hub_setting == "Yes" and get_property(tiger_comm_hub_label, hub_prop) == "No":
             set_property(tiger_comm_hub_label, hub_prop, "Yes")
 
+
 def set_camera_trigger_mode(camera_label: str) -> bool:
     """
     Finds and sets the appropriate external trigger mode on the specified camera.

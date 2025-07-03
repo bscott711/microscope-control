@@ -38,6 +38,7 @@ dependencies = [
     "magicgui>=0.10.1",
     "tigerasi>=0.0.27",
     "pymmcore-gui @ git+https://github.com/pymmcore-plus/pymmcore-gui",
+    "useq-schema",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,7 @@ dev = ["ruff"]
 # --- Entry Points & URLs ---
 [project.scripts]
 microscope-control = "microscope.__main__:main"
+uscope = "microscope.main:main"
 
 [project.urls]
 Homepage = "https://github.com/bscott711/microscope-control"

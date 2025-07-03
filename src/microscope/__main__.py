@@ -43,22 +43,24 @@ def main():
         settings = AcquisitionSettings(camera_exposure_ms=mmc.getExposure())
         settings.laser_trig_duration_ms = settings.camera_exposure_ms
 
-        open_global_shutter(
-            HW.plogic_label, HW.tiger_comm_hub_label, HW.plogic_always_on_cell, HW.plogic_bnc3_addr
-        )
+        open_global_shutter(HW.plogic_label, HW.tiger_comm_hub_label, HW.plogic_always_on_cell, HW.plogic_bnc3_addr)
         configure_plogic_for_dual_nrt_pulses(
-            settings, HW.plogic_label, HW.tiger_comm_hub_label, HW.plogic_laser_preset_num,
-            HW.plogic_camera_cell, HW.pulses_per_ms, HW.plogic_4khz_clock_addr,
-            HW.plogic_trigger_ttl_addr, HW.plogic_laser_on_cell,
+            settings,
+            HW.plogic_label,
+            HW.tiger_comm_hub_label,
+            HW.plogic_laser_preset_num,
+            HW.plogic_camera_cell,
+            HW.pulses_per_ms,
+            HW.plogic_4khz_clock_addr,
+            HW.plogic_trigger_ttl_addr,
+            HW.plogic_laser_on_cell,
         )
         print("--- Hardware ready for acquisition ---")
 
     def _cleanup_after_acquisition(sequence=None):
         """Clean up hardware after the sequence."""
         print("--- SEQUENCE FINISHED: Cleaning up hardware ---")
-        close_global_shutter(
-            HW.plogic_label, HW.tiger_comm_hub_label, HW.plogic_bnc3_addr
-        )
+        close_global_shutter(HW.plogic_label, HW.tiger_comm_hub_label, HW.plogic_bnc3_addr)
         mmc.setProperty(HW.camera_a_label, "TriggerMode", "Internal")
         mmc.setAutoShutter(original_autoshutter_state)
         print("--- Hardware cleanup complete ---")
