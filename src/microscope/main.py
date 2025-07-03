@@ -43,6 +43,7 @@ def main():
 
     mda_widget = window.get_widget(WidgetAction.MDA_WIDGET)
     if mda_widget:
+
         def mda_runner(output=None):
             """Wrapper to call our engine from the GUI."""
             sequence: MDASequence = mda_widget.value()
