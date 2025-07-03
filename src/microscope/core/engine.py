@@ -33,6 +33,7 @@ formatter = logging.Formatter(
 )
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+logger.propagate = False
 
 
 class CustomPLogicMDAEngine(MDAEngine):
