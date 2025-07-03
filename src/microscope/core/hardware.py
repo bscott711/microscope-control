@@ -341,4 +341,3 @@ def reset_for_next_volume(mmc: CMMCorePlus, galvo_label: str = hw_constants.galv
     """
     logger.info("Resetting controller state for next volume...")
     set_property(mmc, galvo_label, "SPIMState", "Idle")
-

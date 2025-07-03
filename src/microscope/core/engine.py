@@ -5,7 +5,13 @@ from itertools import groupby
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
 from pymmcore_plus.metadata import frame_metadata
-from useq import MDASequence, ZAboveBelow, ZRangeAround
+from useq import (
+    MDASequence,
+    MultiPhaseTimePlan,
+    TIntervalLoops,
+    ZAboveBelow,
+    ZRangeAround,
+)
 
 from .constants import HardwareConstants
 from .hardware import (
@@ -65,19 +71,22 @@ class CustomPLogicMDAEngine(MDAEngine):
         """Safely get the Z-step size from any Z-plan object."""
         if isinstance(z_plan, (ZRangeAround, ZAboveBelow)):
             return z_plan.step
-        # For ZAbsolutePositions or other types, calculate from the first two points
         if z_plan and len(z_plan) > 1:
             positions = list(z_plan)
             return abs(positions[1] - positions[0])
         return 0.0
 
-    def _run_hardware_timed_sequence(self, sequence: MDASequence):
-        """
-        Execute a hardware-timed MDA sequence.
+    def _get_time_interval_s(self, time_plan) -> float:
+        """Safely get the time interval in seconds from any TimePlan object."""
+        if isinstance(time_plan, TIntervalLoops):
+            return time_plan.interval.total_seconds()
+        if isinstance(time_plan, MultiPhaseTimePlan) and time_plan.phases:
+            # For a multi-phase plan, recursively inspect the first phase.
+            return self._get_time_interval_s(time_plan.phases[0])
+        return 0.0
 
-        Performs a one-time hardware configuration, then loops through
-        timepoints and positions, triggering a Z-stack at each one.
-        """
+    def _run_hardware_timed_sequence(self, sequence: MDASequence):
+        """Execute a hardware-timed MDA sequence."""
         mmc = self._mmc
         original_autoshutter = mmc.getAutoShutter()
 
@@ -101,29 +110,41 @@ class CustomPLogicMDAEngine(MDAEngine):
                 camera_exposure_ms=mmc.getExposure(),
             )
             configure_plogic_for_dual_nrt_pulses(mmc, settings, self.HW)
-            logger.debug("PLogic configured for dual NRT pulses.")
+            logger.debug("PLogic configured.")
 
             galvo_amplitude_deg = 1.0  # Or derive from settings/sequence
             configure_galvo_for_spim_scan(mmc, galvo_amplitude_deg, num_z_slices, self.HW)
-            logger.debug("Galvo configured for SPIM scan.")
+            logger.debug("Galvo configured.")
             logger.info("Hardware configuration complete.")
             # ---------------------------------------------------------
 
             mmc.mda.events.sequenceStarted.emit(sequence, {})
 
-            # ---- LOOP THROUGH TIMEPOINTS AND POSITIONS ----
+            # ---- MAIN ACQUISITION LOOP ----
             full_event_list = list(sequence)
 
-            # FIX: Use a lambda function to get the t and p indices from event.index
             def key(e):
                 return (e.index.get("t", 0), e.index.get("p", 0))
 
+            # Get the time interval from the sequence plan
+            interval_s = self._get_time_interval_s(sequence.time_plan)
+            last_time_point_start = 0.0
+
             for (t_idx, p_idx), group in groupby(full_event_list, key=key):
+                # -- Enforce Time Interval --
+                if interval_s > 0 and t_idx > 0:
+                    current_time = time.time()
+                    wait_time = (last_time_point_start + interval_s) - current_time
+                    if wait_time > 0:
+                        logger.info(f"Waiting for {wait_time:.2f} seconds...")
+                        time.sleep(wait_time)
+                last_time_point_start = time.time()
+                # -------------------------
+
                 event_group = list(group)
                 first_event = event_group[0]
                 logger.info("Starting stack for T=%d, P=%d", t_idx, p_idx)
 
-                # Move to the XY position for the current stack
                 if first_event.x_pos is not None and first_event.y_pos is not None:
                     logger.debug(
                         "Moving to XY: (%.2f, %.2f)",
@@ -147,9 +168,9 @@ class CustomPLogicMDAEngine(MDAEngine):
                     event = event_group[i]
                     meta = frame_metadata(mmc, mda_event=event)
                     mmc.mda.events.frameReady.emit(tagged_img.pix, event, meta)
-                    logger.debug("Frame collected: %s", event.index)
+                    logger.debug(f"Frame collected: {event.index}")
 
-                logger.info("Z-stack for T=%d, P=%d complete.", t_idx, p_idx)
+                logger.info(f"Z-stack for T={t_idx}, P={p_idx} complete.")
                 reset_for_next_volume(mmc, self.HW.galvo_a_label)
 
         except Exception:

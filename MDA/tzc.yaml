@@ -1,0 +1,22 @@
+axis_order:
+- t
+- p
+- z
+- c
+channels:
+- config: 488nm
+  exposure: 10.0
+  group: Lasers
+metadata:
+  pymmcore_widgets:
+    version: 0.10.0
+stage_positions:
+- x: 2164.89
+  y: -3202.57
+  z: -10.248999999999999
+time_plan:
+  interval: 5.0
+  loops: 5
+z_plan:
+  range: 3.0
+  step: 1.0
