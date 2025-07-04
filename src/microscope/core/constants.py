@@ -13,7 +13,7 @@ class HardwareConstants:
         self.plogic_always_on_cell = 12
         self.plogic_bnc3_addr = 35
         self.pulses_per_ms = 4.0
-        self.plogic_laser_preset_num = 30
+        self.plogic_laser_preset_num = 30 # Laser preset 30 turns on all 4 lasers (BNC 5-8)
         self.slice_calibration_slope_um_per_deg = 100.0
         self.line_scans_per_slice = 1
         self.delay_before_scan_ms = 0.0
