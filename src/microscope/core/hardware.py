@@ -400,3 +400,81 @@ def disable_live_laser(mmc: CMMCorePlus, hw=hw_constants):
     cmd = f"{plogic_addr_prefix}CCA X=10"
     logger.info("Disabling laser for live/snap mode.")
     return send_tiger_command(mmc, cmd)
+
+
+def format_device_response(response_text: str) -> str:
+    """
+    Parses the raw device response into a human-readable format.
+    Handles both complex, multi-line responses and simple, single-line replies.
+    """
+    # --- Clean up the response text ---
+    # The device response may contain literal '\\r' strings.
+    # We replace them with a standard newline character '\n'.
+    cleaned_response = response_text.replace('\\r', '\n')
+    lines = [line.strip() for line in cleaned_response.splitlines() if line.strip()]
+
+    # --- Handle simple, single-line responses ---
+    # If the response is just one line and doesn't contain keywords that
+    # indicate a complex status report, return it directly.
+    if len(lines) == 1:
+        line = lines[0]
+        # Keywords that suggest a more complex, multi-line report.
+        is_complex_report = any(
+            keyword in line for keyword in ["Axis", "Addr", "BootLdr", "Hdwr", "CMDS"]
+        )
+        if not is_complex_report:
+            return line  # Return the simple response as-is
+
+    # --- Process complex, multi-line responses ---
+    axis_info = []
+    system_info = []
+    features = []
+
+    for line in lines:
+        if "Motor Axes" in line or "axis" in line.lower() or "addr" in line.lower():
+            axis_info.append(line)
+        elif any(keyword in line for keyword in ["BootLdr", "Hdwr", "CMDS", "RING", "SAVED"]):
+            system_info.append(line)
+        else:
+            features.append(line)  # Everything else is a feature/status
+
+    # --- Build the formatted string for printing ---
+    formatted_parts = ["--- Device Configuration & Status ---"]
+
+    if axis_info:
+        formatted_parts.append("\n## Axis Information")
+        formatted_parts.extend(f"- {item}" for item in axis_info)
+
+    if system_info:
+        formatted_parts.append("\n## System Information")
+        formatted_parts.extend(f"- {item}" for item in system_info)
+
+    if features:
+        formatted_parts.append("\n## Supported Features & Modules ⚙️")
+        formatted_parts.extend(f"- {item}" for item in features)
+
+    # If, after all that, nothing was categorized, just return the raw text.
+    if not axis_info and not system_info and not features:
+        return response_text
+
+    return "\n".join(formatted_parts)
+
+
+def send_command(mmc: CMMCorePlus, command: str):
+    """
+    Sends a command to the device via the mmc object, gets the raw
+    response, formats it, and prints it.
+    """
+    print(f"▶️ Sending Command: '{command}'")
+
+    # --- Send command and get response using the provided mmc object ---
+    mmc.setProperty("TigerCommHub", "SerialCommand", command)
+    raw_response = mmc.getProperty('TigerCommHub', "SerialResponse")
+
+    # --- Format the response and print it ---
+    formatted_output = format_device_response(raw_response)
+    print(formatted_output)
+
+    # Example usage:
+    # send_command(mmc, "1BU X")
+
