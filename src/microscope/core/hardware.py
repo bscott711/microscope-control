@@ -11,6 +11,7 @@ from typing import Optional
 from pymmcore_plus import CMMCorePlus
 
 from .constants import HardwareConstants
+from .settings import AcquisitionSettings
 
 # Create a single instance of the hardware constants to be used as a default
 hw_constants = HardwareConstants()
@@ -182,7 +183,7 @@ def close_global_shutter(mmc: CMMCorePlus, hw=hw_constants):
     return True
 
 
-def configure_plogic_for_dual_nrt_pulses(mmc: CMMCorePlus, settings, hw=hw_constants):
+def configure_plogic_for_dual_nrt_pulses(mmc: CMMCorePlus, settings: AcquisitionSettings, hw=hw_constants):
     """
     Configures PLogic to generate two independent, synchronized NRT one-shot pulses
     for the camera and laser triggers.
@@ -251,35 +252,72 @@ def configure_plogic_for_dual_nrt_pulses(mmc: CMMCorePlus, settings, hw=hw_const
 
 def set_camera_trigger_mode_level_high(
     mmc: CMMCorePlus, hw=hw_constants, desired_modes=("Level Trigger", "Edge Trigger")
-):
+) -> dict[str, bool]:
     """
-    Sets the camera trigger mode to 'Level Trigger' if supported.
+    Sets the camera trigger mode for all specified cameras.
+
+    Iterates through camera labels defined in the hardware constants,
+    attempts to set a desired trigger mode, and then reverts to 'Internal Trigger'.
 
     Args:
         mmc: Core instance
         hw: Hardware constants object
-        desired_modes: List of acceptable trigger modes
+        desired_modes: A tuple of acceptable trigger modes.
 
     Returns:
-        True if successfully set, False otherwise
+        A dictionary where keys are camera labels and values are booleans
+        indicating if the full sequence of setting and reverting was successful.
     """
-    camera_label = hw.camera_a_label
-    if camera_label not in mmc.getLoadedDevices():
-        logger.warning(f"Camera '{camera_label}' not loaded")
-        return False
+    results = {}
+    # Create a list of all cameras to configure
+    camera_labels = [hw.camera_a_label, hw.camera_b_label]
 
-    if not mmc.hasProperty(camera_label, "TriggerMode"):
-        logger.warning(f"Camera '{camera_label}' does not support TriggerMode")
-        return False
+    for camera_label in camera_labels:
+        # Skip if the camera isn't loaded
+        if camera_label not in mmc.getLoadedDevices():
+            logger.warning(f"Camera '{camera_label}' not loaded, skipping.")
+            continue
 
-    allowed = mmc.getAllowedPropertyValues(camera_label, "TriggerMode")
-    for mode in desired_modes:
-        if mode in allowed:
-            result = mmc.setProperty(camera_label, "TriggerMode", mode)  # noqa: F841
-            logger.info(f"Set Camera TriggerMode to {mode}")
-            return True
-    logger.warning(f"None of {desired_modes} supported for TriggerMode")
-    return False
+        # Check for TriggerMode property
+        if not mmc.hasProperty(camera_label, "TriggerMode"):
+            logger.warning(f"Camera '{camera_label}' does not support TriggerMode.")
+            results[camera_label] = False
+            continue
+
+        allowed = mmc.getAllowedPropertyValues(camera_label, "TriggerMode")
+        success = False
+
+        # First, try to set one of the desired external trigger modes
+        for mode in desired_modes:
+            if mode in allowed:
+                try:
+                    mmc.setProperty(camera_label, "TriggerMode", mode)
+                    logger.info(f"Set {camera_label} TriggerMode to '{mode}'.")
+                    success = True
+                    break  # Mode set, exit the inner loop
+                except Exception as e:
+                    logger.error(f"Failed to set {camera_label} to '{mode}': {e}")
+
+        if not success:
+            logger.warning(f"None of {desired_modes} found for {camera_label}.")
+            results[camera_label] = False
+            continue
+
+        # Always revert to "Internal Trigger" to leave the camera in a ready state
+        internal_mode = "Internal Trigger"
+        if internal_mode in allowed:
+            try:
+                mmc.setProperty(camera_label, "TriggerMode", internal_mode)
+                logger.info(f"Reverted {camera_label} TriggerMode to '{internal_mode}'.")
+                results[camera_label] = True
+            except Exception as e:
+                logger.error(f"Failed to revert {camera_label} to '{internal_mode}': {e}")
+                results[camera_label] = False  # The operation failed if we can't revert
+        else:
+            logger.warning(f"'{internal_mode}' is not supported for {camera_label}.")
+            results[camera_label] = False
+
+    return results
 
 
 def configure_galvo_for_spim_scan(mmc: CMMCorePlus, galvo_amplitude_deg: float, num_slices: int, hw=hw_constants):
@@ -342,3 +380,23 @@ def reset_for_next_volume(mmc: CMMCorePlus, galvo_label: str = hw_constants.galv
     """
     logger.info("Resetting controller state for next volume...")
     set_property(mmc, galvo_label, "SPIMState", "Idle")
+
+
+def enable_live_laser(mmc: CMMCorePlus, hw=hw_constants):
+    """
+    Sets PLogic to preset 12 for live/snap mode laser output.
+    """
+    plogic_addr_prefix = hw.plogic_label.split(":")[-1]
+    cmd = f"{plogic_addr_prefix}CCA X=12"
+    logger.info("Enabling laser for live/snap mode.")
+    return send_tiger_command(mmc, cmd)
+
+
+def disable_live_laser(mmc: CMMCorePlus, hw=hw_constants):
+    """
+    Sets PLogic to preset 10 to disable laser output after live/snap.
+    """
+    plogic_addr_prefix = hw.plogic_label.split(":")[-1]
+    cmd = f"{plogic_addr_prefix}CCA X=10"
+    logger.info("Disabling laser for live/snap mode.")
+    return send_tiger_command(mmc, cmd)
