@@ -25,3 +25,4 @@ class AcquisitionSettings:
     step_size_um: float = 1.0
     laser_trig_duration_ms: float = 10.0
     camera_exposure_ms: float = 10.0
+    galvo_amplitude_deg: float = 1.0

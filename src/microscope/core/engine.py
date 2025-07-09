@@ -7,6 +7,7 @@ from pymmcore_plus.mda import MDAEngine
 from pymmcore_plus.metadata import frame_metadata
 from qtpy.QtCore import QObject, QThread, Signal  # type: ignore
 from useq import (
+    MDAEvent,
     MDASequence,
     MultiPhaseTimePlan,
     TIntervalLoops,
@@ -24,17 +25,8 @@ from .hardware import (
 )
 from .settings import AcquisitionSettings
 
-# Set up logger
+# Get the logger instance without re-configuring it
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler()
-formatter = logging.Formatter(
-    fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-logger.propagate = False
 
 
 class AcquisitionWorker(QObject):
@@ -55,7 +47,7 @@ class AcquisitionWorker(QObject):
         super().__init__(parent)
         self._mmc = mmc
         self.sequence = sequence
-        self.HW = HardwareConstants()
+        self.hw = HardwareConstants()
         self._running = True
 
     def stop(self):
@@ -65,94 +57,9 @@ class AcquisitionWorker(QObject):
     def run(self):
         """Execute a hardware-timed MDA sequence."""
         original_autoshutter = self._mmc.getAutoShutter()
-
-        if not self.sequence.z_plan:
-            logger.error("PLogic acquisition requires a Z-plan.")
-            return
-
-        num_z_slices = len(list(self.sequence.z_plan))
-
         try:
-            # ----------------- ONE-TIME HARDWARE SETUP -----------------
-            logger.info("Performing one-time hardware configuration...")
-            self._mmc.setAutoShutter(False)
-
-            if not set_camera_trigger_mode_level_high(self._mmc, self.HW):
-                raise RuntimeError("Failed to set camera to external trigger mode")
-
-            step_size = self._get_z_step_size(self.sequence.z_plan)
-            settings = AcquisitionSettings(
-                num_slices=num_z_slices,
-                step_size_um=step_size,
-                laser_trig_duration_ms=10.0,
-                camera_exposure_ms=self._mmc.getExposure(),
-            )
-            configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
-            logger.debug("PLogic configured.")
-
-            galvo_amplitude_deg = 1.0  # Or derive from settings/sequence
-            configure_galvo_for_spim_scan(self._mmc, galvo_amplitude_deg, num_z_slices, self.HW)
-            logger.debug("Galvo configured.")
-            logger.info("Hardware configuration complete.")
-            # ---------------------------------------------------------
-
-            # ---- MAIN ACQUISITION LOOP ----
-            full_event_list = list(self.sequence)
-
-            def key(e):
-                return (e.index.get("t", 0), e.index.get("p", 0))
-
-            interval_s = self._get_time_interval_s(self.sequence.time_plan)
-            last_time_point_start = 0.0
-
-            for (t_idx, p_idx), group in groupby(full_event_list, key=key):
-                if not self._running:
-                    break
-
-                # -- Enforce Time Interval --
-                if interval_s > 0 and t_idx > 0:
-                    current_time = time.time()
-                    wait_time = (last_time_point_start + interval_s) - current_time
-                    if wait_time > 0:
-                        logger.info(f"Waiting for {wait_time:.2f} seconds...")
-                        time.sleep(wait_time)
-                last_time_point_start = time.time()
-                # -------------------------
-
-                event_group = list(group)
-                first_event = event_group[0]
-                logger.info("Starting stack for T=%d, P=%d", t_idx, p_idx)
-
-                if first_event.x_pos is not None and first_event.y_pos is not None:
-                    logger.debug(
-                        "Moving to XY: (%.2f, %.2f)",
-                        first_event.x_pos,
-                        first_event.y_pos,
-                    )
-                    self._mmc.setXYPosition(first_event.x_pos, first_event.y_pos)
-                    self._mmc.waitForDevice(self._mmc.getXYStageDevice())
-
-                # --- ACQUIRE ONE Z-STACK ---
-                self._mmc.startSequenceAcquisition(self.HW.camera_a_label, num_z_slices, 0, True)
-                trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
-
-                for i in range(num_z_slices):
-                    if not self._running:
-                        break
-                    while self._mmc.getRemainingImageCount() == 0:
-                        if not self._mmc.isSequenceRunning():
-                            raise RuntimeError("Camera sequence stopped unexpectedly.")
-                        time.sleep(0.001)
-
-                    tagged_img = self._mmc.popNextTaggedImage()
-                    event = event_group[i]
-                    meta = frame_metadata(self._mmc, mda_event=event)
-                    self.frameReady.emit(tagged_img.pix, event, meta)
-                    logger.debug(f"Frame collected: {event.index}")
-
-                logger.info(f"Z-stack for T={t_idx}, P={p_idx} complete.")
-                reset_for_next_volume(self._mmc, self.HW.galvo_a_label)
-
+            settings, num_z = self._setup_hardware()
+            self._execute_mda_loop(settings, num_z)
         except Exception:
             logger.error("Error during acquisition", exc_info=True)
         finally:
@@ -161,6 +68,103 @@ class AcquisitionWorker(QObject):
             self._mmc.setAutoShutter(original_autoshutter)
             self.acquisitionFinished.emit(self.sequence)
             logger.info("Custom PLogic Z-stack completed.")
+
+    def _setup_hardware(self) -> tuple[AcquisitionSettings, int]:
+        """Perform one-time hardware configuration for the sequence."""
+        logger.info("Performing one-time hardware configuration...")
+        self._mmc.setAutoShutter(False)
+
+        if not self.sequence.z_plan:
+            raise ValueError("PLogic acquisition requires a Z-plan.")
+        num_z_slices = len(list(self.sequence.z_plan))
+
+        if not set_camera_trigger_mode_level_high(self._mmc, self.hw):
+            raise RuntimeError("Failed to set camera to external trigger mode")
+
+        step_size = self._get_z_step_size(self.sequence.z_plan)
+        settings = AcquisitionSettings(
+            num_slices=num_z_slices,
+            step_size_um=step_size,
+            laser_trig_duration_ms=10.0,
+            camera_exposure_ms=self._mmc.getExposure(),
+            galvo_amplitude_deg=1.0,  # TODO: Expose in GUI
+        )
+        configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.hw)
+        logger.debug("PLogic configured.")
+
+        configure_galvo_for_spim_scan(self._mmc, settings.galvo_amplitude_deg, num_z_slices, self.hw)
+        logger.debug("Galvo configured.")
+        logger.info("Hardware configuration complete.")
+        return settings, num_z_slices
+
+    def _execute_mda_loop(self, settings: AcquisitionSettings, num_z: int):
+        """Run the main T and P acquisition loop."""
+        full_event_list = list(self.sequence)
+        interval_s = self._get_time_interval_s(self.sequence.time_plan)
+        last_time_point_start = 0.0
+
+        def event_key(e):
+            return e.index.get("t", 0), e.index.get("p", 0)
+
+        for (t_idx, p_idx), group in groupby(full_event_list, key=event_key):
+            if not self._running:
+                break
+
+            # Enforce time interval if necessary
+            if interval_s > 0 and t_idx > 0:
+                wait_time = (last_time_point_start + interval_s) - time.time()
+                if wait_time > 0:
+                    logger.info(f"Waiting for {wait_time:.2f} seconds...")
+                    time.sleep(wait_time)
+            last_time_point_start = time.time()
+
+            event_group = list(group)
+            logger.info("Starting stack for T=%d, P=%d", t_idx, p_idx)
+            self._acquire_position(event_group, num_z)
+
+    def _acquire_position(self, events: list[MDAEvent], num_z: int):
+        """Move to a new XY position and acquire one full Z-stack."""
+        first_event = events[0]
+        if first_event.x_pos is not None and first_event.y_pos is not None:
+            logger.debug(
+                "Moving to XY: (%.2f, %.2f)",
+                first_event.x_pos,
+                first_event.y_pos,
+            )
+            self._mmc.setXYPosition(first_event.x_pos, first_event.y_pos)
+            self._mmc.waitForDevice(self._mmc.getXYStageDevice())
+
+        self._acquire_z_stack(events, num_z)
+
+    def _acquire_z_stack(self, events: list[MDAEvent], num_z: int):
+        """Acquire a single hardware-timed Z-stack."""
+        self._mmc.startSequenceAcquisition(self.hw.camera_a_label, num_z, 0, True)
+        trigger_spim_scan_acquisition(self._mmc, self.hw.galvo_a_label)
+
+        for i in range(num_z):
+            if not self._running:
+                break
+
+            tagged_img = self._pop_image()
+            if tagged_img is None:
+                logger.error("Image polling timed out or sequence stopped.")
+                break
+
+            event = events[i]
+            meta = frame_metadata(self._mmc, mda_event=event)
+            self.frameReady.emit(tagged_img.pix, event, meta)
+            logger.debug(f"Frame collected: {event.index}")
+
+        logger.info(f"Z-stack for event {events[0].index} complete.")
+        reset_for_next_volume(self._mmc, self.hw.galvo_a_label)
+
+    def _pop_image(self):
+        """Poll for the next image from the camera sequence buffer."""
+        while self._mmc.getRemainingImageCount() == 0:
+            if not self._mmc.isSequenceRunning():
+                raise RuntimeError("Camera sequence stopped unexpectedly.")
+            time.sleep(0.001)
+        return self._mmc.popNextTaggedImage()
 
     def _get_z_step_size(self, z_plan) -> float:
         """Safely get the Z-step size from any Z-plan object."""
@@ -187,9 +191,9 @@ class CustomPLogicMDAEngine(MDAEngine):
         """Initialize the engine and fetch the CMMCorePlus instance."""
         self._mmc = CMMCorePlus.instance()
         super().__init__(self._mmc)
-        self.HW = HardwareConstants()
-        self._worker = None
-        self._thread = None
+        self.hw = HardwareConstants()
+        self._worker: AcquisitionWorker | None = None
+        self._thread: QThread | None = None
 
     def run(self, sequence: MDASequence):
         """Run an MDA sequence, delegating to the correct method."""
@@ -214,10 +218,12 @@ class CustomPLogicMDAEngine(MDAEngine):
         """Check if the Core Focus device is the designated Piezo stage."""
         try:
             current_focus_device = self._mmc.getProperty("Core", "Focus")
-            result = current_focus_device == "PiezoStage:P:34"
+            result = current_focus_device == self.hw.plogic_focus_device_label
             logger.debug(
-                f"Checking Core Focus. Current: '{current_focus_device}'. "
-                f"Required: 'PiezoStage:P:34'. Should use PLogic? {result}"
+                "Checking Core Focus. Current: '%s'. Required: '%s'. Use PLogic? %s",
+                current_focus_device,
+                self.hw.plogic_focus_device_label,
+                result,
             )
             return result
         except Exception as e:
@@ -235,5 +241,4 @@ class CustomPLogicMDAEngine(MDAEngine):
             self._thread.wait()
         self._thread = None
         self._worker = None
-        self._mmc.mda.events.sequenceFinished.emit(sequence)
         self._mmc.mda.events.sequenceFinished.emit(sequence)

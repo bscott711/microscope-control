@@ -6,6 +6,8 @@ Hardware-specific functions for controlling ASI Tiger/PLogic devices.
 
 import logging
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
@@ -20,24 +22,37 @@ hw_constants = HardwareConstants()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler()
-formatter = logging.Formatter(fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+formatter = logging.Formatter(
+    fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 logger.propagate = False
 
 
+@contextmanager
+def tiger_command_session(mmc: CMMCorePlus, hw: HardwareConstants) -> Iterator[None]:
+    """
+    A context manager to safely send a series of Tiger commands.
+
+    This temporarily sets 'OnlySendSerialCommandOnChange' to 'No' to ensure
+    all commands are sent, then restores the original setting.
+    """
+    hub_label = hw.tiger_comm_hub_label
+    hub_prop = "OnlySendSerialCommandOnChange"
+    original_setting = get_property(mmc, hub_label, hub_prop)
+    try:
+        if original_setting == "Yes":
+            set_property(mmc, hub_label, hub_prop, "No")
+        yield
+    finally:
+        if original_setting == "Yes":
+            set_property(mmc, hub_label, hub_prop, "Yes")
+
+
 def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Optional[str]:
-    """
-    Safely gets a Micro-Manager device property value.
-
-    Args:
-        mmc: Core instance
-        device_label: The label of the device in Micro-Manager.
-        property_name: The name of the property to retrieve.
-
-    Returns:
-        The property value as a string if found, otherwise None.
-    """
+    """Safely gets a Micro-Manager device property value."""
     if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, property_name):
         val = mmc.getProperty(device_label, property_name)
         logger.debug(f"Got {device_label}.{property_name} = {val}")
@@ -47,18 +62,7 @@ def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Opt
 
 
 def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value: str) -> bool:
-    """
-    Sets a Micro-Manager device property only if it has changed.
-
-    Args:
-        mmc: Core instance
-        device_label: Label of the device.
-        property_name: Name of the property.
-        value: Desired value.
-
-    Returns:
-        True if successfully set, False otherwise.
-    """
+    """Sets a Micro-Manager device property only if it has changed."""
     if device_label not in mmc.getLoadedDevices():
         logger.error(f"Device '{device_label}' not loaded. Cannot set property.")
         return False
@@ -77,23 +81,12 @@ def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value:
             return False
     else:
         logger.debug(f"{device_label}.{property_name} already set to {value}")
-        return False
+        return True  # Return True as the state is correct
 
 
 def send_tiger_command(mmc: CMMCorePlus, cmd: str) -> bool:
-    """
-    Sends a serial command to the TigerCommHub device.
-
-    Args:
-        mmc: Core instance
-        cmd: Serial command to send.
-
-    Returns:
-        True if command was sent, False otherwise.
-    """
-    tiger_label = "TigerCommHub"
-
-    if tiger_label not in mmc.getLoadedDevices():
+    """Sends a serial command to the TigerCommHub device."""
+    if "TigerCommHub" not in mmc.getLoadedDevices():
         logger.error(f"TigerCommHub not loaded. Cannot send command: {cmd}")
         return False
 
@@ -107,26 +100,12 @@ def send_tiger_command(mmc: CMMCorePlus, cmd: str) -> bool:
         return False
 
 
-def open_global_shutter(mmc: CMMCorePlus, hw=hw_constants):
-    """
-    Configures and opens the global shutter on PLogic BNC3.
-    This function programs a PLogic cell to be constantly high and routes it
-    to the BNC3 output. This serves as a "microscope on" or global shutter signal.
-    """
-    plogic_label = hw.plogic_label
-    plogic_addr_prefix = plogic_label.split(":")[-1]
-
-    hub_label = hw.tiger_comm_hub_label
-    hub_prop = "OnlySendSerialCommandOnChange"
-
-    original_setting = get_property(mmc, hub_label, hub_prop)
+def open_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants):
+    """Configures and opens the global shutter on PLogic BNC3."""
+    plogic_addr_prefix = hw.plogic_label.split(":")[-1]
 
     logger.info("Opening global shutter (BNC3 HIGH)")
-    try:
-        # Temporarily allow sending unchanged commands
-        if original_setting == "Yes":
-            set_property(mmc, hub_label, hub_prop, "No")
-
+    with tiger_command_session(mmc, hw):
         # Clear previous settings
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCA X=0")
 
@@ -143,142 +122,82 @@ def open_global_shutter(mmc: CMMCorePlus, hw=hw_constants):
         # Save settings to card
         send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z")
 
-        logger.info("Global shutter is open (BNC3 is HIGH).")
-    finally:
-        if original_setting == "Yes":
-            set_property(mmc, hub_label, hub_prop, "Yes")
+    logger.info("Global shutter is open (BNC3 is HIGH).")
 
 
-def close_global_shutter(mmc: CMMCorePlus, hw=hw_constants):
-    """
-    Closes the global shutter by routing BNC3 to GND (LOW).
-    """
+def close_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants):
+    """Closes the global shutter by routing BNC3 to GND (LOW)."""
     plogic_label = hw.plogic_label
     plogic_addr_prefix = plogic_label.split(":")[-1]
-    hub_label = hw.tiger_comm_hub_label
-    hub_prop = "OnlySendSerialCommandOnChange"
-
-    original_setting = get_property(mmc, hub_label, hub_prop)
 
     logger.info("Closing global shutter (BNC3 LOW)")
-    try:
-        if plogic_label not in mmc.getLoadedDevices():
-            logger.error("PLogic device not found, cannot close shutter.")
-            return False
+    if plogic_label not in mmc.getLoadedDevices():
+        logger.error("PLogic device not found, cannot close shutter.")
+        return
 
-        if original_setting == "Yes":
-            set_property(mmc, hub_label, hub_prop, "No")
-
+    with tiger_command_session(mmc, hw):
         # Route BNC3 output to GND
         send_tiger_command(mmc, f"M E={hw.plogic_bnc3_addr}")
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z=0")
         send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z")
 
-        logger.info("Global shutter is closed (BNC3 is LOW).")
-    except Exception as e:
-        logger.error(f"Could not close global shutter: {e}", exc_info=True)
-    finally:
-        if original_setting == "Yes":
-            set_property(mmc, hub_label, hub_prop, original_setting)
-    return True
+    logger.info("Global shutter is closed (BNC3 is LOW).")
 
 
-def configure_plogic_for_dual_nrt_pulses(mmc: CMMCorePlus, settings: AcquisitionSettings, hw=hw_constants):
-    """
-    Configures PLogic to generate two independent, synchronized NRT one-shot pulses
-    for the camera and laser triggers.
-
-    Args:
-        mmc: Core instance
-        settings: AcquisitionSettings object with exposure/laser timing info
-        hw: HardwareConstants object containing hardware addresses and defaults
-
-    Returns:
-        True if successful, False otherwise
-    """
-    plogic_label = hw.plogic_label
-    plogic_addr_prefix = plogic_label.split(":")[-1]
-    hub_label = hw.tiger_comm_hub_label
-    hub_prop = "OnlySendSerialCommandOnChange"
-
-    original_setting = get_property(mmc, hub_label, hub_prop)
+def configure_plogic_for_dual_nrt_pulses(
+    mmc: CMMCorePlus, settings: AcquisitionSettings, hw: HardwareConstants = hw_constants
+):
+    """Configures PLogic for synchronized camera and laser triggers."""
+    plogic_addr_prefix = hw.plogic_label.split(":")[-1]
 
     logger.info("Configuring PLogic for dual NRT pulses")
-
-    try:
-        if original_setting == "Yes":
-            set_property(mmc, hub_label, hub_prop, "No")
-
+    with tiger_command_session(mmc, hw):
         # Step 1: Program Laser Preset
-        logger.debug(f"Setting Laser preset number: {hw.plogic_laser_preset_num}")
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCA X={hw.plogic_laser_preset_num}")
 
-        # Step 2: Program Camera Pulse (NRT One-Shot #1)
-        logger.debug(f"Programming Camera pulse (cell {hw.plogic_camera_cell})")
+        # Step 2: Program Camera Pulse
         camera_pulse_cycles = int(settings.camera_exposure_ms * hw.pulses_per_ms)
         send_tiger_command(mmc, f"M E={hw.plogic_camera_cell}")
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14")
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={camera_pulse_cycles}")
         send_tiger_command(
-            mmc, f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0"
+            mmc,
+            f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0",
         )
 
-        # Step 3: Program Laser Pulse (NRT One-Shot #2)
-        logger.debug(f"Programming Laser pulse (cell {hw.plogic_laser_on_cell})")
+        # Step 3: Program Laser Pulse
         laser_pulse_cycles = int(settings.laser_trig_duration_ms * hw.pulses_per_ms)
         send_tiger_command(mmc, f"M E={hw.plogic_laser_on_cell}")
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14")
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}")
         send_tiger_command(
-            mmc, f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0"
+            mmc,
+            f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0",
         )
 
         # Step 4: Route Camera Trigger Cell Output to BNC1
-        logger.debug("Routing Camera Trigger Cell Output to BNC1")
         send_tiger_command(mmc, "M E=33")
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_camera_cell}")
 
         # Step 5: Save configuration
         send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z")
-        logger.info("PLogic configured for dual NRT pulses")
-        return True
-    except Exception as e:
-        logger.error(f"Error configuring PLogic: {e}", exc_info=True)
-        return False
-    finally:
-        if original_setting == "Yes":
-            set_property(mmc, hub_label, hub_prop, original_setting)
+    logger.info("PLogic configured for dual NRT pulses")
 
 
 def set_camera_trigger_mode_level_high(
-    mmc: CMMCorePlus, hw=hw_constants, desired_modes=("Level Trigger", "Edge Trigger")
+    mmc: CMMCorePlus,
+    hw: HardwareConstants = hw_constants,
+    desired_modes=("Level Trigger", "Edge Trigger"),
 ) -> dict[str, bool]:
-    """
-    Sets the camera trigger mode for all specified cameras.
-
-    Iterates through camera labels defined in the hardware constants,
-    attempts to set a desired trigger mode, and then reverts to 'Internal Trigger'.
-
-    Args:
-        mmc: Core instance
-        hw: Hardware constants object
-        desired_modes: A tuple of acceptable trigger modes.
-
-    Returns:
-        A dictionary where keys are camera labels and values are booleans
-        indicating if the full sequence of setting and reverting was successful.
-    """
+    """Sets the camera trigger mode for all specified cameras."""
     results = {}
-    # Create a list of all cameras to configure
     camera_labels = [hw.camera_a_label, hw.camera_b_label]
 
     for camera_label in camera_labels:
-        # Skip if the camera isn't loaded
         if camera_label not in mmc.getLoadedDevices():
             logger.warning(f"Camera '{camera_label}' not loaded, skipping.")
             continue
 
-        # Check for TriggerMode property
         if not mmc.hasProperty(camera_label, "TriggerMode"):
             logger.warning(f"Camera '{camera_label}' does not support TriggerMode.")
             results[camera_label] = False
@@ -287,14 +206,12 @@ def set_camera_trigger_mode_level_high(
         allowed = mmc.getAllowedPropertyValues(camera_label, "TriggerMode")
         success = False
 
-        # First, try to set one of the desired external trigger modes
         for mode in desired_modes:
             if mode in allowed:
                 try:
                     mmc.setProperty(camera_label, "TriggerMode", mode)
-                    logger.info(f"Set {camera_label} TriggerMode to '{mode}'.")
                     success = True
-                    break  # Mode set, exit the inner loop
+                    break
                 except Exception as e:
                     logger.error(f"Failed to set {camera_label} to '{mode}': {e}")
 
@@ -303,16 +220,14 @@ def set_camera_trigger_mode_level_high(
             results[camera_label] = False
             continue
 
-        # Always revert to "Internal Trigger" to leave the camera in a ready state
         internal_mode = "Internal Trigger"
         if internal_mode in allowed:
             try:
                 mmc.setProperty(camera_label, "TriggerMode", internal_mode)
-                logger.info(f"Reverted {camera_label} TriggerMode to '{internal_mode}'.")
                 results[camera_label] = True
             except Exception as e:
                 logger.error(f"Failed to revert {camera_label} to '{internal_mode}': {e}")
-                results[camera_label] = False  # The operation failed if we can't revert
+                results[camera_label] = False
         else:
             logger.warning(f"'{internal_mode}' is not supported for {camera_label}.")
             results[camera_label] = False
@@ -320,38 +235,37 @@ def set_camera_trigger_mode_level_high(
     return results
 
 
-def configure_galvo_for_spim_scan(mmc: CMMCorePlus, galvo_amplitude_deg: float, num_slices: int, hw=hw_constants):
-    """
-    Configures the Galvo device for SPIM scanning.
-
-    Args:
-        mmc: Core instance
-        galvo_amplitude_deg: Amplitude in degrees
-        num_slices: Number of slices to scan
-        hw: Hardware constants object
-
-    Returns:
-        True if configuration succeeded
-    """
+def configure_galvo_for_spim_scan(
+    mmc: CMMCorePlus,
+    galvo_amplitude_deg: float,
+    num_slices: int,
+    hw: HardwareConstants = hw_constants,
+):
+    """Configures the Galvo device for SPIM scanning."""
     galvo_label = hw.galvo_a_label
     logger.info(f"Configuring {galvo_label} for SPIM scan")
     try:
-        set_property(mmc, galvo_label, "BeamEnabled", "Yes")
-        set_property(mmc, galvo_label, "SPIMNumSlicesPerPiezo", str(hw.line_scans_per_slice))
-        set_property(mmc, galvo_label, "SPIMDelayBeforeRepeat(ms)", str(hw.delay_before_scan_ms))
-        set_property(mmc, galvo_label, "SPIMNumRepeats", "1")
-        set_property(mmc, galvo_label, "SPIMDelayBeforeSide(ms)", str(hw.delay_before_side_ms))
-        set_property(mmc, galvo_label, "SPIMAlternateDirectionsEnable", "No")
-        set_property(mmc, galvo_label, "SPIMScanDuration(ms)", str(hw.line_scan_duration_ms))
-        set_property(mmc, galvo_label, "SingleAxisYAmplitude(deg)", str(galvo_amplitude_deg))
-        set_property(mmc, galvo_label, "SingleAxisYOffset(deg)", "0")
-        set_property(mmc, galvo_label, "SPIMNumSlices", str(num_slices))
-        set_property(mmc, galvo_label, "SPIMNumSides", "1")
-        set_property(mmc, galvo_label, "SPIMFirstSide", "A")
-        set_property(mmc, galvo_label, "SPIMPiezoHomeDisable", "No")
-        set_property(mmc, galvo_label, "SPIMInterleaveSidesEnable", "No")
-        set_property(mmc, galvo_label, "SingleAxisXAmplitude(deg)", "0")
-        set_property(mmc, galvo_label, "SingleAxisXOffset(deg)", "0")
+        # Using a dictionary to define properties makes this more readable
+        properties_to_set = {
+            "BeamEnabled": "Yes",
+            "SPIMNumSlicesPerPiezo": str(hw.line_scans_per_slice),
+            "SPIMDelayBeforeRepeat(ms)": str(hw.delay_before_scan_ms),
+            "SPIMNumRepeats": "1",
+            "SPIMDelayBeforeSide(ms)": str(hw.delay_before_side_ms),
+            "SPIMAlternateDirectionsEnable": "No",
+            "SPIMScanDuration(ms)": str(hw.line_scan_duration_ms),
+            "SingleAxisYAmplitude(deg)": str(galvo_amplitude_deg),
+            "SingleAxisYOffset(deg)": "0",
+            "SPIMNumSlices": str(num_slices),
+            "SPIMNumSides": "1",
+            "SPIMFirstSide": "A",
+            "SPIMPiezoHomeDisable": "No",
+            "SPIMInterleaveSidesEnable": "No",
+            "SingleAxisXAmplitude(deg)": "0",
+            "SingleAxisXOffset(deg)": "0",
+        }
+        for prop, value in properties_to_set.items():
+            set_property(mmc, galvo_label, prop, value)
         logger.info("Galvo configured for SPIM scan")
         return True
     except Exception as e:
@@ -360,121 +274,70 @@ def configure_galvo_for_spim_scan(mmc: CMMCorePlus, galvo_amplitude_deg: float, 
 
 
 def trigger_spim_scan_acquisition(mmc: CMMCorePlus, galvo_label: str = hw_constants.galvo_a_label):
-    """
-    Triggers the SPIM scan acquisition by setting SPIMState to Running.
-    """
+    """Triggers the SPIM scan acquisition by setting SPIMState to Running."""
     logger.info("Triggering SPIM scan acquisition...")
-    try:
-        set_property(mmc, galvo_label, "SPIMState", "Running")
-        spim_state = get_property(mmc, galvo_label, "SPIMState")
-        logger.debug(f"{galvo_label} SPIMState: {spim_state}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to start SPIM scan: {e}", exc_info=True)
-        return False
+    set_property(mmc, galvo_label, "SPIMState", "Running")
 
 
 def reset_for_next_volume(mmc: CMMCorePlus, galvo_label: str = hw_constants.galvo_a_label):
-    """
-    Resets scanner state after volume acquisition.
-    """
-    logger.info("Resetting controller state for next volume...")
+    """Resets scanner state after volume acquisition."""
+    logger.debug("Resetting controller state for next volume...")
     set_property(mmc, galvo_label, "SPIMState", "Idle")
 
 
-def enable_live_laser(mmc: CMMCorePlus, hw=hw_constants):
-    """
-    Sets PLogic to preset 12 for live/snap mode laser output.
-    """
+def enable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants):
+    """Sets PLogic to preset 12 for live/snap mode laser output."""
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
     cmd = f"{plogic_addr_prefix}CCA X=12"
-    logger.info("Enabling laser for live/snap mode.")
+    logger.debug("Enabling laser for live/snap mode.")
     return send_tiger_command(mmc, cmd)
 
 
-def disable_live_laser(mmc: CMMCorePlus, hw=hw_constants):
-    """
-    Sets PLogic to preset 10 to disable laser output after live/snap.
-    """
+def disable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants):
+    """Sets PLogic to preset 10 to disable laser output after live/snap."""
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
     cmd = f"{plogic_addr_prefix}CCA X=10"
-    logger.info("Disabling laser for live/snap mode.")
+    logger.debug("Disabling laser for live/snap mode.")
     return send_tiger_command(mmc, cmd)
 
 
 def format_device_response(response_text: str) -> str:
-    """
-    Parses the raw device response into a human-readable format.
-    Handles both complex, multi-line responses and simple, single-line replies.
-    """
-    # --- Clean up the response text ---
-    # The device response may contain literal '\\r' strings.
-    # We replace them with a standard newline character '\n'.
-    cleaned_response = response_text.replace('\\r', '\n')
+    """Parses the raw device response into a human-readable format."""
+    cleaned_response = response_text.replace("\\r", "\n")
     lines = [line.strip() for line in cleaned_response.splitlines() if line.strip()]
 
-    # --- Handle simple, single-line responses ---
-    # If the response is just one line and doesn't contain keywords that
-    # indicate a complex status report, return it directly.
     if len(lines) == 1:
         line = lines[0]
-        # Keywords that suggest a more complex, multi-line report.
-        is_complex_report = any(
-            keyword in line for keyword in ["Axis", "Addr", "BootLdr", "Hdwr", "CMDS"]
-        )
-        if not is_complex_report:
-            return line  # Return the simple response as-is
+        is_complex = any(k in line for k in ["Axis", "Addr", "BootLdr", "Hdwr"])
+        if not is_complex:
+            return line
 
-    # --- Process complex, multi-line responses ---
-    axis_info = []
-    system_info = []
-    features = []
-
+    parts = {"Axis": [], "System": [], "Features": []}
     for line in lines:
-        if "Motor Axes" in line or "axis" in line.lower() or "addr" in line.lower():
-            axis_info.append(line)
-        elif any(keyword in line for keyword in ["BootLdr", "Hdwr", "CMDS", "RING", "SAVED"]):
-            system_info.append(line)
+        if "axis" in line.lower() or "addr" in line.lower():
+            parts["Axis"].append(line)
+        elif any(k in line for k in ["BootLdr", "Hdwr", "CMDS", "RING", "SAVED"]):
+            parts["System"].append(line)
         else:
-            features.append(line)  # Everything else is a feature/status
+            parts["Features"].append(line)
 
-    # --- Build the formatted string for printing ---
-    formatted_parts = ["--- Device Configuration & Status ---"]
+    output = ["--- Device Configuration & Status ---"]
+    if parts["Axis"]:
+        output.append("\n## Axis Information")
+        output.extend(f"- {item}" for item in parts["Axis"])
+    if parts["System"]:
+        output.append("\n## System Information")
+        output.extend(f"- {item}" for item in parts["System"])
+    if parts["Features"]:
+        output.append("\n## Supported Features & Modules ⚙️")
+        output.extend(f"- {item}" for item in parts["Features"])
 
-    if axis_info:
-        formatted_parts.append("\n## Axis Information")
-        formatted_parts.extend(f"- {item}" for item in axis_info)
-
-    if system_info:
-        formatted_parts.append("\n## System Information")
-        formatted_parts.extend(f"- {item}" for item in system_info)
-
-    if features:
-        formatted_parts.append("\n## Supported Features & Modules ⚙️")
-        formatted_parts.extend(f"- {item}" for item in features)
-
-    # If, after all that, nothing was categorized, just return the raw text.
-    if not axis_info and not system_info and not features:
-        return response_text
-
-    return "\n".join(formatted_parts)
+    return "\n".join(output) if len(output) > 1 else response_text
 
 
-def send_command(mmc: CMMCorePlus, command: str):
-    """
-    Sends a command to the device via the mmc object, gets the raw
-    response, formats it, and prints it.
-    """
+def send_and_print_command(mmc: CMMCorePlus, command: str):
+    """Sends a command, gets the raw response, formats it, and prints it."""
     print(f"▶️ Sending Command: '{command}'")
-
-    # --- Send command and get response using the provided mmc object ---
     mmc.setProperty("TigerCommHub", "SerialCommand", command)
-    raw_response = mmc.getProperty('TigerCommHub', "SerialResponse")
-
-    # --- Format the response and print it ---
-    formatted_output = format_device_response(raw_response)
-    print(formatted_output)
-
-    # Example usage:
-    # send_command(mmc, "1BU X")
-
+    raw_response = mmc.getProperty("TigerCommHub", "SerialResponse")
+    print(format_device_response(raw_response))
