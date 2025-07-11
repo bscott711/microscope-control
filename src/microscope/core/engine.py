@@ -19,6 +19,8 @@ from .constants import HardwareConstants
 from .hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
+    disable_live_laser,
+    reset_camera_trigger_mode_internal,
     reset_for_next_volume,
     set_camera_trigger_mode_level_high,
     trigger_spim_scan_acquisition,
@@ -92,7 +94,7 @@ class AcquisitionWorker(QObject):
         configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.hw)
         logger.debug("PLogic configured.")
 
-        configure_galvo_for_spim_scan(self._mmc, settings.galvo_amplitude_deg, num_z_slices, self.hw)
+        configure_galvo_for_spim_scan(self._mmc, settings, self.hw)
         logger.debug("Galvo configured.")
         logger.info("Hardware configuration complete.")
         return settings, num_z_slices
@@ -235,10 +237,28 @@ class CustomPLogicMDAEngine(MDAEngine):
         self._mmc.mda.events.frameReady.emit(frame, event, meta)
 
     def _on_acquisition_finished(self, sequence):
-        """Slot to handle the acquisitionFinished signal from the worker."""
+        """
+        Slot to handle the acquisitionFinished signal from the worker.
+
+        This now includes the crucial hardware state cleanup.
+        """
+        logger.info("Custom MDA sequence finished. Cleaning up hardware state.")
+
+        # 1. Reset camera trigger modes to 'Internal Trigger' for both cameras.
+        reset_camera_trigger_mode_internal(self._mmc, self.hw)
+
+        # 2. Disable the laser output on the PLogic card.
+        disable_live_laser(self._mmc, self.hw)
+
+        # 3. Disable the SPIM beam on the galvo.
+        self._mmc.setProperty(self.hw.galvo_a_label, "BeamEnabled", "No")
+        logger.debug("SPIM beam disabled.")
+
+        # Original thread cleanup logic
         if self._thread:
             self._thread.quit()
             self._thread.wait()
         self._thread = None
         self._worker = None
         self._mmc.mda.events.sequenceFinished.emit(sequence)
+        logger.info("Hardware and thread cleanup complete.")

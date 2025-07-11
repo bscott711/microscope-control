@@ -1,3 +1,6 @@
+# src/microscope/core/constants.py
+
+
 class HardwareConstants:
     def __init__(self):
         self.cfg_path = "hardware_profiles/20250523-OPM.cfg"
@@ -6,7 +9,6 @@ class HardwareConstants:
         self.camera_a_label = "Camera-1"
         self.camera_b_label = "Camera-2"
         self.plogic_label = "PLogic:E:36"
-        self.plogic_focus_device_label = "PiezoStage:P:34"
         self.tiger_comm_hub_label = "TigerCommHub"
         self.plogic_trigger_ttl_addr = 41
         self.plogic_4khz_clock_addr = 192
@@ -21,3 +23,7 @@ class HardwareConstants:
         self.delay_before_scan_ms = 0.0
         self.line_scan_duration_ms = 1.0
         self.delay_before_side_ms = 0.0
+        self.plogic_focus_device_label = "PiezoStage:P:34"
+        self.xy_stage_label = "XYStage:XY:31"
+        self.z_stage_label = "ZStage:Z:32"
+        self.f_stage_label = "ZStage:F:35"

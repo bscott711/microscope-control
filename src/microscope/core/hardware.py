@@ -235,17 +235,58 @@ def set_camera_trigger_mode_level_high(
     return results
 
 
+def reset_camera_trigger_mode_internal(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants) -> dict[str, bool]:
+    """Sets the camera trigger mode to 'Internal Trigger' for all specified cameras."""
+    results = {}
+    camera_labels = [hw.camera_a_label, hw.camera_b_label]
+    internal_mode = "Internal Trigger"
+
+    for camera_label in camera_labels:
+        if camera_label not in mmc.getLoadedDevices():
+            logger.warning(f"Camera '{camera_label}' not loaded, skipping reset.")
+            continue
+
+        if not mmc.hasProperty(camera_label, "TriggerMode"):
+            logger.warning(f"Camera '{camera_label}' does not support TriggerMode, skipping reset.")
+            results[camera_label] = False
+            continue
+
+        allowed = mmc.getAllowedPropertyValues(camera_label, "TriggerMode")
+        if internal_mode in allowed:
+            try:
+                set_property(mmc, camera_label, "TriggerMode", internal_mode)
+                logger.debug(f"Reset {camera_label} trigger mode to '{internal_mode}'.")
+                results[camera_label] = True
+            except Exception as e:
+                logger.error(f"Failed to reset {camera_label} to '{internal_mode}': {e}")
+                results[camera_label] = False
+        else:
+            logger.warning(f"'{internal_mode}' is not a supported mode for {camera_label}.")
+            results[camera_label] = False
+
+    return results
+
+
 def configure_galvo_for_spim_scan(
     mmc: CMMCorePlus,
-    galvo_amplitude_deg: float,
-    num_slices: int,
+    settings: AcquisitionSettings,  # Use the whole settings object
     hw: HardwareConstants = hw_constants,
 ):
     """Configures the Galvo device for SPIM scanning."""
     galvo_label = hw.galvo_a_label
     logger.info(f"Configuring {galvo_label} for SPIM scan")
+
+    # Calculate the required scan amplitude in degrees
+    total_range_um = settings.num_slices * settings.step_size_um
+    galvo_amplitude_deg = total_range_um / hw.slice_calibration_slope_um_per_deg
+    logger.debug(
+        "Calculated galvo amplitude: %.3f deg for %d slices at %.2f um/slice",
+        galvo_amplitude_deg,
+        settings.num_slices,
+        settings.step_size_um,
+    )
+
     try:
-        # Using a dictionary to define properties makes this more readable
         properties_to_set = {
             "BeamEnabled": "Yes",
             "SPIMNumSlicesPerPiezo": str(hw.line_scans_per_slice),
@@ -254,9 +295,11 @@ def configure_galvo_for_spim_scan(
             "SPIMDelayBeforeSide(ms)": str(hw.delay_before_side_ms),
             "SPIMAlternateDirectionsEnable": "No",
             "SPIMScanDuration(ms)": str(hw.line_scan_duration_ms),
+            # Use the calculated amplitude
             "SingleAxisYAmplitude(deg)": str(galvo_amplitude_deg),
             "SingleAxisYOffset(deg)": "0",
-            "SPIMNumSlices": str(num_slices),
+            # Use num_slices from settings
+            "SPIMNumSlices": str(settings.num_slices),
             "SPIMNumSides": "1",
             "SPIMFirstSide": "A",
             "SPIMPiezoHomeDisable": "No",
