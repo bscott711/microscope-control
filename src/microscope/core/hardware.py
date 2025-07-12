@@ -267,65 +267,96 @@ def reset_camera_trigger_mode_internal(mmc: CMMCorePlus, hw: HardwareConstants =
     return results
 
 
-def configure_galvo_for_spim_scan(
+def configure_galvo_for_hardware_timed_scan(
     mmc: CMMCorePlus,
-    settings: AcquisitionSettings,  # Use the whole settings object
+    settings: AcquisitionSettings,
     hw: HardwareConstants = hw_constants,
 ):
-    """Configures the Galvo device for SPIM scanning."""
-    galvo_label = hw.galvo_a_label
-    logger.info(f"Configuring {galvo_label} for SPIM scan")
+    """
+    Configure the galvo for a fully hardware-timed staircase scan (Z-stack).
 
-    # Calculate the required scan amplitude in degrees
-    total_range_um = settings.num_slices * settings.step_size_um
-    galvo_amplitude_deg = total_range_um / hw.slice_calibration_slope_um_per_deg
-    logger.debug(
-        "Calculated galvo amplitude: %.3f deg for %d slices at %.2f um/slice",
-        galvo_amplitude_deg,
-        settings.num_slices,
-        settings.step_size_um,
-    )
+    This function implements the documented procedure for using the ASI Tiger
+    controller's `MM_SPIM` firmware to generate a galvo-triggered Z-stack.
+    The process is a two-part configuration:
+
+    1.  **Physical Geometry (`singleaxis` commands):**
+        We define the absolute physical space of the scan.
+        - `SAO` (Single-Axis Offset): Sets the absolute center of the scan range.
+        - `SAA` (Single-Axis Amplitude): Sets the total peak-to-peak travel
+          distance of the scan.
+
+    2.  **Digital Sequence & Timing (`MM_SPIM` commands):**
+        We define the discrete steps and triggers within that physical space.
+        - `SCANR Y`: Sets the number of discrete slices (steps).
+        - `SCANR Z`: A mode byte to control hardware behavior. We set bit 3
+          to disable the "return-to-home" action after each step, which is
+          essential for the staircase to progress.
+        - `SCANV F`: Sets the "settle time" to wait after the galvo moves
+          to a new position before any triggers are fired.
+        - `SCANV T/R`: Sets the delay from the end of the settle time to when
+          the camera and laser triggers are sent.
+        - `RT T/R`: Sets the duration of the level trigger pulse for the
+          camera and laser.
+
+    After this function runs, the galvo is fully armed. A single `SCAN`
+    command will then initiate the entire autonomous, hardware-timed sequence.
+
+    Args:
+        mmc: The CMMCorePlus instance.
+        settings: An AcquisitionSettings object containing parameters like
+                  number of slices and step size.
+        hw: The HardwareConstants object.
+
+    Returns:
+        True if configuration was successful, False otherwise.
+    """
+    galvo_label = hw.galvo_a_label
+    logger.info(f"Configuring {galvo_label} for hardware-timed scan...")
+
+    # 1. DEFINE PHYSICAL SCAN GEOMETRY
+    if settings.num_slices > 1:
+        total_range_um = (settings.num_slices - 1) * settings.step_size_um
+        total_range_deg = total_range_um / hw.slice_calibration_slope_um_per_deg
+    else:
+        total_range_deg = 0.0
+
+    pos_str = get_property(mmc, galvo_label, "Position")
+    if pos_str is None:
+        raise RuntimeError(f"Could not get current position for galvo '{galvo_label}'.")
+    current_pos_deg = float(pos_str)
+    center_pos_deg = current_pos_deg + (total_range_deg / 2.0)
 
     try:
-        properties_to_set = {
-            "BeamEnabled": "Yes",
-            "SPIMNumSlicesPerPiezo": str(hw.line_scans_per_slice),
-            "SPIMDelayBeforeRepeat(ms)": str(hw.delay_before_scan_ms),
-            "SPIMNumRepeats": "1",
-            "SPIMDelayBeforeSide(ms)": str(hw.delay_before_side_ms),
-            "SPIMAlternateDirectionsEnable": "No",
-            "SPIMScanDuration(ms)": str(hw.line_scan_duration_ms),
-            # Use the calculated amplitude
-            "SingleAxisYAmplitude(deg)": str(galvo_amplitude_deg),
-            "SingleAxisYOffset(deg)": "0",
-            # Use num_slices from settings
-            "SPIMNumSlices": str(settings.num_slices),
-            "SPIMNumSides": "1",
-            "SPIMFirstSide": "A",
-            "SPIMPiezoHomeDisable": "No",
-            "SPIMInterleaveSidesEnable": "No",
-            "SingleAxisXAmplitude(deg)": "0",
-            "SingleAxisXOffset(deg)": "0",
-        }
-        for prop, value in properties_to_set.items():
-            set_property(mmc, galvo_label, prop, value)
-        logger.info("Galvo configured for SPIM scan")
+        # Set the center position (offset) of the scan
+        set_property(mmc, galvo_label, "SAO", str(center_pos_deg))
+        # Set the total peak-to-peak travel distance (amplitude)
+        set_property(mmc, galvo_label, "SAA", str(total_range_deg))
+        logger.debug(
+            f"Galvo geometry set: Center={center_pos_deg:.4f} deg, "
+            f"Range={total_range_deg:.4f} deg"
+        )
+
+        # 2. DEFINE DIGITAL SEQUENCE & TIMING (MM_SPIM Syntax)
+        set_property(mmc, galvo_label, "SCANR Y", str(settings.num_slices))
+        set_property(mmc, galvo_label, "SCANR Z", str(hw.SPIM_MODE_BYTE))
+        set_property(mmc, galvo_label, "SCANV F", str(hw.SCAN_SETTLE_TIME_MS))
+        set_property(mmc, galvo_label, "SCANV T", str(hw.CAMERA_LASER_DELAY_MS))
+        set_property(mmc, galvo_label, "SCANV R", str(hw.CAMERA_LASER_DELAY_MS))
+
+        exposure_ms = settings.camera_exposure_ms
+        set_property(mmc, galvo_label, "RT T", str(exposure_ms))
+        set_property(mmc, galvo_label, "RT R", str(exposure_ms))
+
+        logger.info(
+            "Galvo sequence configured for %d steps with %.2f um/slice.",
+            settings.num_slices,
+            settings.step_size_um,
+        )
         return True
+
     except Exception as e:
-        logger.error(f"Error configuring galvo: {e}", exc_info=True)
+        logger.error(f"Error configuring galvo for hardware scan: {e}", exc_info=True)
         return False
-
-
-def trigger_spim_scan_acquisition(mmc: CMMCorePlus, galvo_label: str = hw_constants.galvo_a_label):
-    """Triggers the SPIM scan acquisition by setting SPIMState to Running."""
-    logger.info("Triggering SPIM scan acquisition...")
-    set_property(mmc, galvo_label, "SPIMState", "Running")
-
-
-def reset_for_next_volume(mmc: CMMCorePlus, galvo_label: str = hw_constants.galvo_a_label):
-    """Resets scanner state after volume acquisition."""
-    logger.debug("Resetting controller state for next volume...")
-    set_property(mmc, galvo_label, "SPIMState", "Idle")
 
 
 def enable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants):

@@ -27,3 +27,7 @@ class HardwareConstants:
         self.xy_stage_label = "XYStage:XY:31"
         self.z_stage_label = "ZStage:Z:32"
         self.f_stage_label = "ZStage:F:35"
+        self.SPIM_MODE_BYTE = 8  # Disables galvo homing between slices
+        self.SCAN_SETTLE_TIME_MS = 0.75  # Galvo settle time after moving
+        self.CAMERA_LASER_DELAY_MS = 0.25  # Delay after settling to fire triggers
+
