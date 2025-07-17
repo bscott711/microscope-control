@@ -20,6 +20,7 @@ from microscope.core.hardware import (
     close_global_shutter,
     open_global_shutter,
     set_camera_trigger_mode_level_high,
+    set_property,
 )
 
 # Set up logger
@@ -66,6 +67,10 @@ def main():
 
     logger.info("Opening global shutter on startup...")
     open_global_shutter(mmc, hw)
+
+    # Enable the SPIM beam on startup
+    logger.info("Enabling SPIM beam on startup...")
+    set_property(mmc, hw.galvo_a_label, "BeamEnabled", "Yes")
 
     logger.info("Setting camera trigger modes on startup...")
     set_camera_trigger_mode_level_high(mmc, hw)

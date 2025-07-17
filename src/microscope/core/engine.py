@@ -20,12 +20,10 @@ from .hardware import (
     configure_galvo_for_hardware_timed_scan,
     configure_plogic_for_dual_nrt_pulses,
     disable_live_laser,
-    query_tiger_command,
     reset_camera_trigger_mode_internal,
     send_tiger_command,
     set_camera_trigger_mode_level_high,
     set_piezo_sleep,
-    set_property,
 )
 from .settings import AcquisitionSettings
 
@@ -46,6 +44,7 @@ class AcquisitionWorker(QObject):
         self.sequence = sequence
         self.hw = HardwareConstants()
         self._running = True
+        self.settings: AcquisitionSettings | None = None
 
     def stop(self):
         """Stop the acquisition."""
@@ -58,7 +57,7 @@ class AcquisitionWorker(QObject):
             # Disable piezo sleep for the duration of the MDA
             set_piezo_sleep(self._mmc, self.hw, enabled=False)
             # Perform a single, one-time hardware setup
-            self._setup_hardware()
+            self._setup_mda()
             # Execute the main loop for T and P axes
             self._execute_mda_loop()
         except Exception:
@@ -73,11 +72,11 @@ class AcquisitionWorker(QObject):
             self.acquisitionFinished.emit(self.sequence)
             logger.info("Custom hardware-timed Z-stack completed.")
 
-    def _setup_hardware(self):
+    def _setup_mda(self):
         """
         Perform one-time hardware configuration for the entire MDA sequence.
         """
-        logger.info("Performing one-time hardware configuration...")
+        logger.info("Performing one-time MDA configuration...")
         self._mmc.setAutoShutter(False)
 
         if not self.sequence.z_plan:
@@ -88,17 +87,16 @@ class AcquisitionWorker(QObject):
 
         num_z_slices = len(list(self.sequence.z_plan))
         step_size = self._get_z_step_size(self.sequence.z_plan)
-        settings = AcquisitionSettings(
+        self.settings = AcquisitionSettings(
             num_slices=num_z_slices,
             step_size_um=step_size,
             camera_exposure_ms=self._mmc.getExposure(),
         )
 
-        # Configure the galvo and PLogic for the entire autonomous scan
-        configure_galvo_for_hardware_timed_scan(self._mmc, settings, self.hw)
-        configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.hw)
+        # Configure PLogic for the entire autonomous scan, this is not position-dependent
+        configure_plogic_for_dual_nrt_pulses(self._mmc, self.settings, self.hw)
 
-        logger.info("Hardware configuration complete.")
+        logger.info("One-time MDA configuration complete.")
 
     def _execute_mda_loop(self):
         """
@@ -124,27 +122,48 @@ class AcquisitionWorker(QObject):
 
             event_group = list(group)
             logger.info("Starting stack for T=%d, P=%d", t_idx, p_idx)
-            self._acquire_position(event_group)
+            self._acquire_stack_at_position(event_group)
 
-    def _acquire_position(self, events: list[MDAEvent]):
+    def _acquire_stack_at_position(self, events: list[MDAEvent]):
         """
-        Move to a new XY position and acquire one full Z-stack.
+        Prepare hardware for a new position and acquire a Z-stack.
+        This is called for every timepoint and position.
         """
         first_event = events[0]
-        if first_event.x_pos is not None and first_event.y_pos is not None:
-            logger.debug(
-                "Moving to XY: (%.2f, %.2f)",
-                first_event.x_pos,
-                first_event.y_pos,
-            )
-            self._mmc.setXYPosition(first_event.x_pos, first_event.y_pos)
-            self._mmc.waitForDevice(self._mmc.getXYStageDevice())
+        galvo_label = self.hw.galvo_a_label
+        address = galvo_label.split(":")[-1]
 
+        # 1. Ensure scanner is stopped before re-configuring.
+        logger.debug(f"Issuing stop command to scanner card {address}.")
+        send_tiger_command(self._mmc, f"{address}SCAN X=80")  # 'P' (80) is the stop state
+        time.sleep(0.2)  # Fixed delay to allow hardware to process the stop command.
+
+        # 2. Move XY stage if necessary.
+        if first_event.x_pos is not None and first_event.y_pos is not None:
+            current_x, current_y = self._mmc.getXYPosition()
+            # Use a small tolerance for float comparison
+            if abs(current_x - first_event.x_pos) > 0.1 or abs(current_y - first_event.y_pos) > 0.1:
+                logger.debug(f"Moving to XY: ({first_event.x_pos:.2f}, {first_event.y_pos:.2f})")
+                self._mmc.setXYPosition(first_event.x_pos, first_event.y_pos)
+                self._mmc.waitForDevice(self._mmc.getXYStageDevice())
+            else:
+                logger.debug("Already at target XY position.")
+
+        # 3. Configure galvo for the scan at the current position.
+        if self.settings:
+            logger.info("Configuring galvo for Z-stack.")
+            configure_galvo_for_hardware_timed_scan(self._mmc, self.settings, self.hw)
+        else:
+            logger.error("Settings not available, cannot configure galvo.")
+            return
+
+        # 4. Acquire the Z-stack.
         self._acquire_hardware_timed_z_stack(events)
 
     def _acquire_hardware_timed_z_stack(self, events: list[MDAEvent]):
         """
         Trigger and acquire a single, fully autonomous hardware-timed Z-stack.
+        Assumes hardware (galvo, etc.) is already configured for this stack.
         """
         num_z = len(events)
         galvo_label = self.hw.galvo_a_label
@@ -159,7 +178,6 @@ class AcquisitionWorker(QObject):
         # Collect the images as they arrive from the hardware
         for event in events:
             if not self._running:
-                # Stop the scan. 'P' (ASCII 80) is the stop state.
                 send_tiger_command(self._mmc, f"{address}SCAN X=80")
                 break
             tagged_img = self._mmc.popNextTaggedImage()
@@ -167,9 +185,7 @@ class AcquisitionWorker(QObject):
             self.frameReady.emit(tagged_img.pix, event, meta)
             logger.debug(f"Frame collected: {event.index}")
 
-        # After collecting all images, wait for the scanner to be idle ('I' state)
-        while "I" not in query_tiger_command(self._mmc, f"{address}SCAN X?"):
-            time.sleep(0.01)
+        # After collecting all images, the scan is done.
         logger.info(f"Z-stack for event {events[0].index} complete.")
 
     def _get_z_step_size(self, z_plan) -> float:
@@ -235,8 +251,6 @@ class CustomPLogicMDAEngine(MDAEngine):
         logger.info("Custom MDA sequence finished. Cleaning up hardware state.")
         reset_camera_trigger_mode_internal(self._mmc, self.hw)
         disable_live_laser(self._mmc, self.hw)
-        set_property(self._mmc, self.hw.galvo_a_label, "BeamEnabled", "No")
-        logger.debug("SPIM beam disabled.")
 
         if self._thread:
             self._thread.quit()
