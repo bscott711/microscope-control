@@ -276,10 +276,10 @@ def configure_galvo_for_spim_scan(
     galvo_label = hw.galvo_a_label
     logger.info(f"Configuring {galvo_label} for SPIM scan")
 
-    # Calculate the required scan amplitude in degrees
-    total_range_um = settings.num_slices * settings.step_size_um
-    galvo_amplitude_deg = total_range_um / hw.slice_calibration_slope_um_per_deg
-    logger.debug(
+    galvo_amplitude_deg = (
+        settings.step_size_um / hw.slice_calibration_slope_um_per_deg
+    )
+    logger.info(
         "Calculated galvo amplitude: %.3f deg for %d slices at %.2f um/slice",
         galvo_amplitude_deg,
         settings.num_slices,
@@ -295,17 +295,15 @@ def configure_galvo_for_spim_scan(
             "SPIMDelayBeforeSide(ms)": str(hw.delay_before_side_ms),
             "SPIMAlternateDirectionsEnable": "No",
             "SPIMScanDuration(ms)": str(hw.line_scan_duration_ms),
-            # Use the calculated amplitude
-            "SingleAxisYAmplitude(deg)": str(galvo_amplitude_deg),
-            "SingleAxisYOffset(deg)": "0",
-            # Use num_slices from settings
+            "SingleAxisXAmplitude(deg)": str(galvo_amplitude_deg), # Was Y
+            "SingleAxisXOffset(deg)": "0",                        # Was Y
             "SPIMNumSlices": str(settings.num_slices),
             "SPIMNumSides": "1",
             "SPIMFirstSide": "A",
             "SPIMPiezoHomeDisable": "No",
             "SPIMInterleaveSidesEnable": "No",
-            "SingleAxisXAmplitude(deg)": "0",
-            "SingleAxisXOffset(deg)": "0",
+            "SingleAxisYAmplitude(deg)": "0",
+            "SingleAxisYOffset(deg)": "0",
         }
         for prop, value in properties_to_set.items():
             set_property(mmc, galvo_label, prop, value)
