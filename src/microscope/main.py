@@ -19,7 +19,7 @@ from microscope.core.engine import CustomPLogicMDAEngine
 from microscope.core.hardware import (
     close_global_shutter,
     open_global_shutter,
-    set_camera_trigger_mode_level_high,
+    reset_camera_trigger_mode_internal,  # Changed import
     set_property,
 )
 
@@ -72,8 +72,8 @@ def main():
     logger.info("Enabling SPIM beam on startup...")
     set_property(mmc, hw.galvo_a_label, "BeamEnabled", "Yes")
 
-    logger.info("Setting camera trigger modes on startup...")
-    set_camera_trigger_mode_level_high(mmc, hw)
+    logger.info("Setting camera trigger modes to internal on startup...")
+    reset_camera_trigger_mode_internal(mmc, hw)  # Changed function call
 
     engine = CustomPLogicMDAEngine()
     mmc.register_mda_engine(engine)

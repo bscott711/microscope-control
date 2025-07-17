@@ -1,3 +1,5 @@
+# src/microscope/core/engine.py
+
 import logging
 import time
 from itertools import groupby
@@ -53,6 +55,8 @@ class AcquisitionWorker(QObject):
     def run(self):
         """Execute a hardware-timed MDA sequence."""
         original_autoshutter = self._mmc.getAutoShutter()
+        original_timeout = self._mmc.getTimeoutMs()  # CORRECTED METHOD
+
         try:
             # Disable piezo sleep for the duration of the MDA
             set_piezo_sleep(self._mmc, self.hw, enabled=False)
@@ -69,6 +73,7 @@ class AcquisitionWorker(QObject):
             if self._mmc.isSequenceRunning():
                 self._mmc.stopSequenceAcquisition()
             self._mmc.setAutoShutter(original_autoshutter)
+            self._mmc.setTimeoutMs(original_timeout)
             self.acquisitionFinished.emit(self.sequence)
             logger.info("Custom hardware-timed Z-stack completed.")
 
@@ -82,7 +87,7 @@ class AcquisitionWorker(QObject):
         if not self.sequence.z_plan:
             raise ValueError("Hardware-timed scan requires a Z-plan.")
 
-        # This function returns a dictionary of results, but we can just check if it ran
+        # Set camera trigger mode to Level High for the hardware-timed scan
         set_camera_trigger_mode_level_high(self._mmc, self.hw)
 
         num_z_slices = len(list(self.sequence.z_plan))
@@ -95,6 +100,14 @@ class AcquisitionWorker(QObject):
 
         # Configure PLogic for the entire autonomous scan, this is not position-dependent
         configure_plogic_for_dual_nrt_pulses(self._mmc, self.settings, self.hw)
+
+        # Manually enable the master laser control cell (8) for the MDA.
+        # This avoids calling enable_live_laser() which would load a conflicting preset.
+        logger.info("Enabling laser for MDA sequence.")
+        plogic_addr_prefix = self.hw.plogic_label.split(":")[-1]
+        send_tiger_command(self._mmc, "M E=8")
+        send_tiger_command(self._mmc, f"{plogic_addr_prefix}CCA Y=0")  # Cell Type: Constant
+        send_tiger_command(self._mmc, f"{plogic_addr_prefix}CCA Z=1")  # Value: HIGH
 
         logger.info("One-time MDA configuration complete.")
 
@@ -135,7 +148,7 @@ class AcquisitionWorker(QObject):
 
         # 1. Ensure scanner is stopped before re-configuring.
         logger.debug(f"Issuing stop command to scanner card {address}.")
-        send_tiger_command(self._mmc, f"{address}SCAN X=80")  # 'P' (80) is the stop state
+        send_tiger_command(self._mmc, f"{address}SCAN X=P")  # 'P' is the stop state
         time.sleep(0.2)  # Fixed delay to allow hardware to process the stop command.
 
         # 2. Move XY stage if necessary.
@@ -166,27 +179,44 @@ class AcquisitionWorker(QObject):
         Assumes hardware (galvo, etc.) is already configured for this stack.
         """
         num_z = len(events)
-        galvo_label = self.hw.galvo_a_label
-        address = galvo_label.split(":")[-1]
+        cam_label = self.hw.camera_a_label
+        address = self.hw.galvo_a_label.split(":")[-1]
+
+        # Set a timeout to ensure popNextImage blocks but doesn't hang forever
+        exposure_ms = self.settings.camera_exposure_ms if self.settings else 10.0
+        timeout_ms = int(exposure_ms + 5000)
+        self._mmc.setTimeoutMs(timeout_ms)
+        logger.debug(f"Set acquisition timeout to {timeout_ms} ms.")
 
         # Prime the camera to expect `num_z` frames
-        self._mmc.startSequenceAcquisition(self.hw.camera_a_label, num_z, 0, True)
+        self._mmc.startSequenceAcquisition(cam_label, num_z, 0, True)
 
         # Send the single 'SCAN' command to start the hardware sequence
         send_tiger_command(self._mmc, f"{address}SCAN")
 
-        # Collect the images as they arrive from the hardware
-        for event in events:
-            if not self._running:
-                send_tiger_command(self._mmc, f"{address}SCAN X=80")
-                break
-            tagged_img = self._mmc.popNextTaggedImage()
-            meta = frame_metadata(self._mmc, mda_event=event)
-            self.frameReady.emit(tagged_img.pix, event, meta)
-            logger.debug(f"Frame collected: {event.index}")
+        # Collect the images as they arrive by blocking until they are ready
+        frames_collected = 0
+        try:
+            for i, event in enumerate(events):
+                if not self._running:
+                    logger.warning("Acquisition stopped mid-stack by user.")
+                    send_tiger_command(self._mmc, f"{address}SCAN X=P")
+                    break
 
-        # After collecting all images, the scan is done.
-        logger.info(f"Z-stack for event {events[0].index} complete.")
+                # This call will block until an image is available or the timeout is reached
+                tagged_img = self._mmc.popNextTaggedImage()
+                meta = frame_metadata(self._mmc, mda_event=event)
+                self.frameReady.emit(tagged_img.pix, event, meta)
+                logger.debug(f"Frame collected: {event.index}")
+                frames_collected += 1
+
+        except RuntimeError as e:
+            logger.error(f"Acquisition timed out waiting for image. Error: {e}")
+        finally:
+            # Ensure we stop the sequence acquisition for this stack
+            if self._mmc.isSequenceRunning(cam_label):
+                self._mmc.stopSequenceAcquisition(cam_label)
+            logger.info(f"Z-stack for event {events[0].index} complete. Collected {frames_collected}/{num_z} frames.")
 
     def _get_z_step_size(self, z_plan) -> float:
         """Safely get the Z-step size from any Z-plan object."""
