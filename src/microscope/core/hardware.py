@@ -100,6 +100,23 @@ def send_tiger_command(mmc: CMMCorePlus, cmd: str) -> bool:
         return False
 
 
+def query_tiger_command(mmc: CMMCorePlus, cmd: str) -> str:
+    """Sends a serial query to the TigerCommHub and returns the response."""
+    if "TigerCommHub" not in mmc.getLoadedDevices():
+        logger.error(f"TigerCommHub not loaded. Cannot send query: {cmd}")
+        return ""
+
+    try:
+        mmc.setProperty("TigerCommHub", "SerialCommand", cmd)
+        time.sleep(0.01)  # Give time for the command to be processed
+        response = mmc.getProperty("TigerCommHub", "SerialResponse")
+        logger.debug(f"Tiger query '{cmd}' -> '{response}'")
+        return response
+    except Exception as e:
+        logger.error(f"Failed to send Tiger query: {cmd} - {e}", exc_info=True)
+        return ""
+
+
 def open_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants):
     """Configures and opens the global shutter on PLogic BNC3."""
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
@@ -275,43 +292,20 @@ def configure_galvo_for_hardware_timed_scan(
     """
     Configure the galvo for a fully hardware-timed staircase scan (Z-stack).
 
-    This function implements the documented procedure for using the ASI Tiger
-    controller's `MM_SPIM` firmware to generate a galvo-triggered Z-stack.
-    The process is a two-part configuration:
-
-    1.  **Physical Geometry (`singleaxis` commands):**
-        We define the absolute physical space of the scan.
-        - `SAO` (Single-Axis Offset): Sets the absolute center of the scan range.
-        - `SAA` (Single-Axis Amplitude): Sets the total peak-to-peak travel
-          distance of the scan.
-
-    2.  **Digital Sequence & Timing (`MM_SPIM` commands):**
-        We define the discrete steps and triggers within that physical space.
-        - `SCANR Y`: Sets the number of discrete slices (steps).
-        - `SCANR Z`: A mode byte to control hardware behavior. We set bit 3
-          to disable the "return-to-home" action after each step, which is
-          essential for the staircase to progress.
-        - `SCANV F`: Sets the "settle time" to wait after the galvo moves
-          to a new position before any triggers are fired.
-        - `SCANV T/R`: Sets the delay from the end of the settle time to when
-          the camera and laser triggers are sent.
-        - `RT T/R`: Sets the duration of the level trigger pulse for the
-          camera and laser.
-
-    After this function runs, the galvo is fully armed. A single `SCAN`
-    command will then initiate the entire autonomous, hardware-timed sequence.
-
-    Args:
-        mmc: The CMMCorePlus instance.
-        settings: An AcquisitionSettings object containing parameters like
-                  number of slices and step size.
-        hw: The HardwareConstants object.
-
-    Returns:
-        True if configuration was successful, False otherwise.
+    This function sends serial commands to the Tiger controller to configure
+    a hardware-timed scan based on the MM_SPIM firmware module.
     """
     galvo_label = hw.galvo_a_label
     logger.info(f"Configuring {galvo_label} for hardware-timed scan...")
+
+    # Extract address and axis from the device label, e.g., "Scanner:AB:33" -> "33", "A"
+    try:
+        parts = galvo_label.split(":")
+        address = parts[-1]
+        axis_name = parts[1][0]  # Assuming 'A' from 'AB' for single-axis commands
+    except IndexError:
+        logger.error(f"Could not parse address and axis from galvo label: {galvo_label}")
+        return False
 
     # 1. DEFINE PHYSICAL SCAN GEOMETRY
     if settings.num_slices > 1:
@@ -320,32 +314,33 @@ def configure_galvo_for_hardware_timed_scan(
     else:
         total_range_deg = 0.0
 
-    pos_str = get_property(mmc, galvo_label, "Position")
+    pos_str = get_property(mmc, galvo_label, "SingleAxisXOffset(deg)")
     if pos_str is None:
         raise RuntimeError(f"Could not get current position for galvo '{galvo_label}'.")
     current_pos_deg = float(pos_str)
     center_pos_deg = current_pos_deg + (total_range_deg / 2.0)
 
     try:
-        # Set the center position (offset) of the scan
-        set_property(mmc, galvo_label, "SAO", str(center_pos_deg))
-        # Set the total peak-to-peak travel distance (amplitude)
-        set_property(mmc, galvo_label, "SAA", str(total_range_deg))
-        logger.debug(
-            f"Galvo geometry set: Center={center_pos_deg:.4f} deg, "
-            f"Range={total_range_deg:.4f} deg"
-        )
+        with tiger_command_session(mmc, hw):
+            # Set the center position (offset) of the scan
+            send_tiger_command(mmc, f"{address}SAO {axis_name}={center_pos_deg:.4f}")
+            # Set the total peak-to-peak travel distance (amplitude)
+            send_tiger_command(mmc, f"{address}SAA {axis_name}={total_range_deg:.4f}")
+            logger.debug(f"Galvo geometry set: Center={center_pos_deg:.4f} deg, Range={total_range_deg:.4f} deg")
 
-        # 2. DEFINE DIGITAL SEQUENCE & TIMING (MM_SPIM Syntax)
-        set_property(mmc, galvo_label, "SCANR Y", str(settings.num_slices))
-        set_property(mmc, galvo_label, "SCANR Z", str(hw.SPIM_MODE_BYTE))
-        set_property(mmc, galvo_label, "SCANV F", str(hw.SCAN_SETTLE_TIME_MS))
-        set_property(mmc, galvo_label, "SCANV T", str(hw.CAMERA_LASER_DELAY_MS))
-        set_property(mmc, galvo_label, "SCANV R", str(hw.CAMERA_LASER_DELAY_MS))
+            # 2. DEFINE DIGITAL SEQUENCE & TIMING (MM_SPIM Syntax)
+            # Slices per volume and SPIM mode
+            send_tiger_command(mmc, f"{address}SCANR Y={settings.num_slices} Z={hw.SPIM_MODE_BYTE}")
 
-        exposure_ms = settings.camera_exposure_ms
-        set_property(mmc, galvo_label, "RT T", str(exposure_ms))
-        set_property(mmc, galvo_label, "RT R", str(exposure_ms))
+            # Settling and trigger delays
+            send_tiger_command(
+                mmc,
+                f"{address}SCANV F={hw.SCAN_SETTLE_TIME_MS} T={hw.CAMERA_LASER_DELAY_MS} R={hw.CAMERA_LASER_DELAY_MS}",
+            )
+
+            # Trigger durations
+            exposure_ms = settings.camera_exposure_ms
+            send_tiger_command(mmc, f"{address}RT T={exposure_ms} R={exposure_ms}")
 
         logger.info(
             "Galvo sequence configured for %d steps with %.2f um/slice.",
@@ -372,6 +367,34 @@ def disable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants):
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
     cmd = f"{plogic_addr_prefix}CCA X=10"
     logger.debug("Disabling laser for live/snap mode.")
+    return send_tiger_command(mmc, cmd)
+
+
+def wake_piezo(mmc: CMMCorePlus, hw: HardwareConstants = hw_constants) -> bool:
+    """Sends a relative move of 0 to wake the piezo stage."""
+    piezo_addr = hw.piezo_a_label.split(":")[-1]
+    cmd = f"{piezo_addr}R P=0"
+    logger.debug(f"Waking up piezo with command: {cmd}")
+    return send_tiger_command(mmc, cmd)
+
+
+def set_piezo_sleep(mmc: CMMCorePlus, hw: HardwareConstants, enabled: bool) -> bool:
+    """
+    Enables or disables piezo sleep mode.
+
+    Args:
+        mmc: The CMMCorePlus instance.
+        hw: The HardwareConstants object.
+        enabled: True to enable sleep, False to disable.
+
+    Returns:
+        True if the command was sent successfully, False otherwise.
+    """
+    piezo_addr = hw.piezo_a_label.split(":")[-1]
+    mode_val = 5 if enabled else 0
+    state_str = "Enabling" if enabled else "Disabling"
+    cmd = f"{piezo_addr}PZ F={mode_val}"
+    logger.info(f"{state_str} piezo sleep.")
     return send_tiger_command(mmc, cmd)
 
 

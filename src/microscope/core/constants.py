@@ -30,4 +30,3 @@ class HardwareConstants:
         self.SPIM_MODE_BYTE = 8  # Disables galvo homing between slices
         self.SCAN_SETTLE_TIME_MS = 0.75  # Galvo settle time after moving
         self.CAMERA_LASER_DELAY_MS = 0.25  # Delay after settling to fire triggers
-

@@ -6,13 +6,15 @@ from pymmcore_gui.actions import QCoreAction
 from pymmcore_plus import CMMCorePlus
 
 from .constants import HardwareConstants
-from .hardware import disable_live_laser, enable_live_laser
+from .hardware import disable_live_laser, enable_live_laser, wake_piezo
 
 logger = logging.getLogger(__name__)
 
 
 def prepare_for_acquisition(mmc: CMMCorePlus, hw: HardwareConstants) -> None:
     """Enable the beam and laser in preparation for an acquisition."""
+    logger.debug("Waking piezo for acquisition.")
+    wake_piezo(mmc, hw)
     logger.debug("Enabling SPIM beam...")
     mmc.setProperty(hw.galvo_a_label, "BeamEnabled", "Yes")
     logger.debug("Enabling PLogic laser output...")

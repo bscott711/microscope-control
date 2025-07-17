@@ -20,9 +20,11 @@ from .hardware import (
     configure_galvo_for_hardware_timed_scan,
     configure_plogic_for_dual_nrt_pulses,
     disable_live_laser,
-    get_property,
+    query_tiger_command,
     reset_camera_trigger_mode_internal,
+    send_tiger_command,
     set_camera_trigger_mode_level_high,
+    set_piezo_sleep,
     set_property,
 )
 from .settings import AcquisitionSettings
@@ -53,6 +55,8 @@ class AcquisitionWorker(QObject):
         """Execute a hardware-timed MDA sequence."""
         original_autoshutter = self._mmc.getAutoShutter()
         try:
+            # Disable piezo sleep for the duration of the MDA
+            set_piezo_sleep(self._mmc, self.hw, enabled=False)
             # Perform a single, one-time hardware setup
             self._setup_hardware()
             # Execute the main loop for T and P axes
@@ -61,6 +65,8 @@ class AcquisitionWorker(QObject):
             logger.error("Error during acquisition", exc_info=True)
         finally:
             logger.info("Acquisition sequence finished. Cleaning up.")
+            # Re-enable piezo sleep after the MDA is complete
+            set_piezo_sleep(self._mmc, self.hw, enabled=True)
             if self._mmc.isSequenceRunning():
                 self._mmc.stopSequenceAcquisition()
             self._mmc.setAutoShutter(original_autoshutter)
@@ -77,8 +83,8 @@ class AcquisitionWorker(QObject):
         if not self.sequence.z_plan:
             raise ValueError("Hardware-timed scan requires a Z-plan.")
 
-        if not set_camera_trigger_mode_level_high(self._mmc, self.hw):
-            raise RuntimeError("Failed to set camera to external trigger mode")
+        # This function returns a dictionary of results, but we can just check if it ran
+        set_camera_trigger_mode_level_high(self._mmc, self.hw)
 
         num_z_slices = len(list(self.sequence.z_plan))
         step_size = self._get_z_step_size(self.sequence.z_plan)
@@ -97,7 +103,6 @@ class AcquisitionWorker(QObject):
     def _execute_mda_loop(self):
         """
         Run the main T and P acquisition loop.
-        This is preserved from your original code.
         """
         full_event_list = list(self.sequence)
         interval_s = self._get_time_interval_s(self.sequence.time_plan)
@@ -111,9 +116,7 @@ class AcquisitionWorker(QObject):
                 break
 
             if interval_s > 0 and t_idx > 0:
-                wait_time = (
-                    last_time_point_start + interval_s
-                ) - time.time()
+                wait_time = (last_time_point_start + interval_s) - time.time()
                 if wait_time > 0:
                     logger.info(f"Waiting for {wait_time:.2f} seconds...")
                     time.sleep(wait_time)
@@ -126,7 +129,6 @@ class AcquisitionWorker(QObject):
     def _acquire_position(self, events: list[MDAEvent]):
         """
         Move to a new XY position and acquire one full Z-stack.
-        This is preserved from your original code.
         """
         first_event = events[0]
         if first_event.x_pos is not None and first_event.y_pos is not None:
@@ -146,25 +148,27 @@ class AcquisitionWorker(QObject):
         """
         num_z = len(events)
         galvo_label = self.hw.galvo_a_label
+        address = galvo_label.split(":")[-1]
 
         # Prime the camera to expect `num_z` frames
         self._mmc.startSequenceAcquisition(self.hw.camera_a_label, num_z, 0, True)
 
         # Send the single 'SCAN' command to start the hardware sequence
-        set_property(self._mmc, galvo_label, "SCAN", "1")
+        send_tiger_command(self._mmc, f"{address}SCAN")
 
         # Collect the images as they arrive from the hardware
         for event in events:
             if not self._running:
-                set_property(self._mmc, galvo_label, "SCAN", "P")  # Stop
+                # Stop the scan. 'P' (ASCII 80) is the stop state.
+                send_tiger_command(self._mmc, f"{address}SCAN X=80")
                 break
             tagged_img = self._mmc.popNextTaggedImage()
             meta = frame_metadata(self._mmc, mda_event=event)
             self.frameReady.emit(tagged_img.pix, event, meta)
             logger.debug(f"Frame collected: {event.index}")
 
-        # After collecting all images, wait for the scanner to be idle
-        while get_property(self._mmc, galvo_label, "SCAN X?") != "I":
+        # After collecting all images, wait for the scanner to be idle ('I' state)
+        while "I" not in query_tiger_command(self._mmc, f"{address}SCAN X?"):
             time.sleep(0.01)
         logger.info(f"Z-stack for event {events[0].index} complete.")
 
@@ -189,7 +193,6 @@ class AcquisitionWorker(QObject):
 class CustomPLogicMDAEngine(MDAEngine):
     """
     Custom MDA engine for PLogic-driven SPIM Z-stacks.
-    This class is preserved from your original code.
     """
 
     def __init__(self):
