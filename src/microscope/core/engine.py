@@ -1,6 +1,5 @@
 import logging
 import time
-from itertools import groupby
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
@@ -18,7 +17,6 @@ from .constants import HardwareConstants
 from .hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
-    reset_for_next_volume,
     set_camera_trigger_mode_level_high,
     trigger_spim_scan_acquisition,
 )
@@ -70,13 +68,27 @@ class AcquisitionWorker(QObject):
             logger.error("PLogic acquisition requires a Z-plan.")
             return
 
+        # --- Get sequence parameters ---
         num_z_slices = len(list(self.sequence.z_plan))
+        num_timepoints = self.sequence.time_plan.loops if self.sequence.time_plan else 1
+        interval_s = self._get_time_interval_s(self.sequence.time_plan)
+        # The controller delay is from the end of one scan to the start of the next.
+        # We must subtract the time it takes to acquire one z-stack.
+        scan_duration_s = (num_z_slices * self._mmc.getExposure()) / 1000.0
+        repeat_delay_s = interval_s - scan_duration_s
+        repeat_delay_ms = max(0, repeat_delay_s * 1000.0)
+
+        total_images_expected = num_z_slices * num_timepoints
+        logger.info(
+            "Starting hardware-timed series: %d timepoints, %d z-slices, %.2f ms interval",
+            num_timepoints,
+            num_z_slices,
+            repeat_delay_ms,
+        )
 
         try:
             # ----------------- ONE-TIME HARDWARE SETUP -----------------
-            logger.info("Performing one-time hardware configuration...")
             self._mmc.setAutoShutter(False)
-
             if not set_camera_trigger_mode_level_high(self._mmc, self.HW):
                 raise RuntimeError("Failed to set camera to external trigger mode")
 
@@ -84,74 +96,44 @@ class AcquisitionWorker(QObject):
             settings = AcquisitionSettings(
                 num_slices=num_z_slices,
                 step_size_um=step_size,
-                laser_trig_duration_ms=10.0,
                 camera_exposure_ms=self._mmc.getExposure(),
             )
             configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
-            logger.debug("PLogic configured.")
 
             galvo_amplitude_deg = 1.0  # Or derive from settings/sequence
-            configure_galvo_for_spim_scan(self._mmc, galvo_amplitude_deg, num_z_slices, self.HW)
-            logger.debug("Galvo configured.")
-            logger.info("Hardware configuration complete.")
+            configure_galvo_for_spim_scan(
+                self._mmc,
+                galvo_amplitude_deg,
+                num_z_slices,
+                num_repeats=num_timepoints,
+                repeat_delay_ms=repeat_delay_ms,
+                hw=self.HW,
+            )
+            logger.info("Hardware configured for full time-series.")
             # ---------------------------------------------------------
 
-            # ---- MAIN ACQUISITION LOOP ----
-            full_event_list = list(self.sequence)
+            # ---- SINGLE TRIGGER AND COLLECTION LOOP ----
+            self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images_expected, 0, True)
+            trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
 
-            def key(e):
-                return (e.index.get("t", 0), e.index.get("p", 0))
+            # Create an iterator to emit the correct event with each image
+            events = iter(self.sequence)
 
-            interval_s = self._get_time_interval_s(self.sequence.time_plan)
-            last_time_point_start = 0.0
-
-            for (t_idx, p_idx), group in groupby(full_event_list, key=key):
+            for i in range(total_images_expected):
                 if not self._running:
                     break
+                while self._mmc.getRemainingImageCount() == 0:
+                    if not self._mmc.isSequenceRunning():
+                        raise RuntimeError("Camera sequence stopped unexpectedly.")
+                    time.sleep(0.001)
 
-                # -- Enforce Time Interval --
-                if interval_s > 0 and t_idx > 0:
-                    current_time = time.time()
-                    wait_time = (last_time_point_start + interval_s) - current_time
-                    if wait_time > 0:
-                        logger.info(f"Waiting for {wait_time:.2f} seconds...")
-                        time.sleep(wait_time)
-                last_time_point_start = time.time()
-                # -------------------------
+                tagged_img = self._mmc.popNextTaggedImage()
+                event = next(events)
+                meta = frame_metadata(self._mmc, mda_event=event)
+                self.frameReady.emit(tagged_img.pix, event, meta)
+                logger.debug(f"Frame collected: {event.index}")
 
-                event_group = list(group)
-                first_event = event_group[0]
-                logger.info("Starting stack for T=%d, P=%d", t_idx, p_idx)
-
-                if first_event.x_pos is not None and first_event.y_pos is not None:
-                    logger.debug(
-                        "Moving to XY: (%.2f, %.2f)",
-                        first_event.x_pos,
-                        first_event.y_pos,
-                    )
-                    self._mmc.setXYPosition(first_event.x_pos, first_event.y_pos)
-                    self._mmc.waitForDevice(self._mmc.getXYStageDevice())
-
-                # --- ACQUIRE ONE Z-STACK ---
-                self._mmc.startSequenceAcquisition(self.HW.camera_a_label, num_z_slices, 0, True)
-                trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
-
-                for i in range(num_z_slices):
-                    if not self._running:
-                        break
-                    while self._mmc.getRemainingImageCount() == 0:
-                        if not self._mmc.isSequenceRunning():
-                            raise RuntimeError("Camera sequence stopped unexpectedly.")
-                        time.sleep(0.001)
-
-                    tagged_img = self._mmc.popNextTaggedImage()
-                    event = event_group[i]
-                    meta = frame_metadata(self._mmc, mda_event=event)
-                    self.frameReady.emit(tagged_img.pix, event, meta)
-                    logger.debug(f"Frame collected: {event.index}")
-
-                logger.info(f"Z-stack for T={t_idx}, P={p_idx} complete.")
-                reset_for_next_volume(self._mmc, self.HW.galvo_a_label)
+            logger.info("Hardware-driven time-series complete.")
 
         except Exception:
             logger.error("Error during acquisition", exc_info=True)

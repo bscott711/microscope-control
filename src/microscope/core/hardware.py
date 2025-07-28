@@ -320,7 +320,14 @@ def set_camera_trigger_mode_level_high(
     return results
 
 
-def configure_galvo_for_spim_scan(mmc: CMMCorePlus, galvo_amplitude_deg: float, num_slices: int, hw=hw_constants):
+def configure_galvo_for_spim_scan(
+    mmc: CMMCorePlus,
+    galvo_amplitude_deg: float,
+    num_slices: int,
+    num_repeats: int,
+    repeat_delay_ms: float,
+    hw=hw_constants,
+):
     """
     Configures the Galvo device for SPIM scanning.
 
@@ -328,6 +335,8 @@ def configure_galvo_for_spim_scan(mmc: CMMCorePlus, galvo_amplitude_deg: float, 
         mmc: Core instance
         galvo_amplitude_deg: Amplitude in degrees
         num_slices: Number of slices to scan
+        num_repeats: Number of times to repeat the volume scan (for time-series).
+        repeat_delay_ms: Delay in ms between volume repeats.
         hw: Hardware constants object
 
     Returns:
@@ -338,8 +347,8 @@ def configure_galvo_for_spim_scan(mmc: CMMCorePlus, galvo_amplitude_deg: float, 
     try:
         set_property(mmc, galvo_label, "BeamEnabled", "Yes")
         set_property(mmc, galvo_label, "SPIMNumSlicesPerPiezo", str(hw.line_scans_per_slice))
-        set_property(mmc, galvo_label, "SPIMDelayBeforeRepeat(ms)", str(hw.delay_before_scan_ms))
-        set_property(mmc, galvo_label, "SPIMNumRepeats", "1")
+        set_property(mmc, galvo_label, "SPIMDelayBeforeRepeat(ms)", str(repeat_delay_ms))
+        set_property(mmc, galvo_label, "SPIMNumRepeats", str(num_repeats))
         set_property(mmc, galvo_label, "SPIMDelayBeforeSide(ms)", str(hw.delay_before_side_ms))
         set_property(mmc, galvo_label, "SPIMAlternateDirectionsEnable", "No")
         set_property(mmc, galvo_label, "SPIMScanDuration(ms)", str(hw.line_scan_duration_ms))
@@ -374,12 +383,18 @@ def trigger_spim_scan_acquisition(mmc: CMMCorePlus, galvo_label: str = hw_consta
         return False
 
 
-def reset_for_next_volume(mmc: CMMCorePlus, galvo_label: str = hw_constants.galvo_a_label):
+def reset_for_next_volume(mmc: CMMCorePlus, num_slices: int, galvo_label: str = hw_constants.galvo_a_label):
     """
     Resets scanner state after volume acquisition.
+
+    Sets the SPIM state to Armed and then re-applies the number of slices
+    as a safeguard against the controller resetting its parameters.
     """
-    logger.info("Resetting controller state for next volume...")
-    set_property(mmc, galvo_label, "SPIMState", "Idle")
+    logger.info("Resetting controller state for next volume by setting state to Armed.")
+    set_property(mmc, galvo_label, "SPIMState", "Armed")
+    # As a safeguard, re-apply the number of slices.
+    logger.debug(f"Re-applying SPIMNumSlices = {num_slices}")
+    set_property(mmc, galvo_label, "SPIMNumSlices", str(num_slices))
 
 
 def enable_live_laser(mmc: CMMCorePlus, hw=hw_constants):
