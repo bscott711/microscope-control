@@ -116,7 +116,20 @@ class AcquisitionWorker(QObject):
             )
             configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
 
-            galvo_amplitude_deg = 1.0  # Or derive from settings/sequence
+            # Calculate the required galvo amplitude from the z-plan range
+            z_positions = list(self.sequence.z_plan)
+            if len(z_positions) > 1:
+                z_range = max(z_positions) - min(z_positions)
+                galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
+                logger.info(
+                    "Calculated galvo amplitude of %.4f deg for a Z-range of %.2f um.",
+                    galvo_amplitude_deg,
+                    z_range,
+                )
+            else:
+                galvo_amplitude_deg = 0
+                logger.info("Z-plan has fewer than 2 points. Setting galvo amplitude to 0.")
+
             configure_galvo_for_spim_scan(
                 self._mmc,
                 galvo_amplitude_deg,
@@ -154,7 +167,7 @@ class AcquisitionWorker(QObject):
 
             logger.info("Hardware-driven time-series complete.")
 
-        except Exception:
+        except Exception as _e:
             logger.error("Error during acquisition", exc_info=True)
         finally:
             logger.info("Acquisition sequence finished. Cleaning up.")
