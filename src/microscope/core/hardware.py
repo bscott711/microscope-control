@@ -320,6 +320,28 @@ def set_camera_trigger_mode_level_high(
     return results
 
 
+def set_camera_for_hardware_trigger(mmc: CMMCorePlus, camera_label: str) -> bool:
+    """Sets a camera to the correct external trigger mode for an acquisition."""
+    logger.info(f"Setting {camera_label} to external trigger mode for acquisition.")
+    if camera_label not in mmc.getLoadedDevices():
+        logger.error(f"Camera '{camera_label}' not loaded.")
+        return False
+    if not mmc.hasProperty(camera_label, "TriggerMode"):
+        logger.warning(f"Camera '{camera_label}' does not support TriggerMode.")
+        return False
+
+    allowed = mmc.getAllowedPropertyValues(camera_label, "TriggerMode")
+    # Prefer "Level Trigger" as it's often used for constant-exposure acquisitions
+    for mode in ("Level Trigger", "Edge Trigger"):
+        if mode in allowed:
+            set_property(mmc, camera_label, "TriggerMode", mode)
+            logger.info(f"Set {camera_label} TriggerMode to '{mode}'.")
+            return True
+
+    logger.error(f"Could not find a suitable external trigger mode for {camera_label}.")
+    return False
+
+
 def configure_galvo_for_spim_scan(
     mmc: CMMCorePlus,
     galvo_amplitude_deg: float,
@@ -381,20 +403,6 @@ def trigger_spim_scan_acquisition(mmc: CMMCorePlus, galvo_label: str = hw_consta
     except Exception as e:
         logger.error(f"Failed to start SPIM scan: {e}", exc_info=True)
         return False
-
-
-def reset_for_next_volume(mmc: CMMCorePlus, num_slices: int, galvo_label: str = hw_constants.galvo_a_label):
-    """
-    Resets scanner state after volume acquisition.
-
-    Sets the SPIM state to Armed and then re-applies the number of slices
-    as a safeguard against the controller resetting its parameters.
-    """
-    logger.info("Resetting controller state for next volume by setting state to Armed.")
-    set_property(mmc, galvo_label, "SPIMState", "Armed")
-    # As a safeguard, re-apply the number of slices.
-    logger.debug(f"Re-applying SPIMNumSlices = {num_slices}")
-    set_property(mmc, galvo_label, "SPIMNumSlices", str(num_slices))
 
 
 def enable_live_laser(mmc: CMMCorePlus, hw=hw_constants):

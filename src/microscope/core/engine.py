@@ -17,7 +17,8 @@ from .constants import HardwareConstants
 from .hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
-    set_camera_trigger_mode_level_high,
+    set_camera_for_hardware_trigger,
+    set_property,
     trigger_spim_scan_acquisition,
 )
 from .settings import AcquisitionSettings
@@ -70,13 +71,28 @@ class AcquisitionWorker(QObject):
 
         # --- Get sequence parameters ---
         num_z_slices = len(list(self.sequence.z_plan))
-        num_timepoints = self.sequence.time_plan.loops if self.sequence.time_plan else 1
+        num_timepoints = self.sequence.shape[0]
         interval_s = self._get_time_interval_s(self.sequence.time_plan)
         # The controller delay is from the end of one scan to the start of the next.
         # We must subtract the time it takes to acquire one z-stack.
         scan_duration_s = (num_z_slices * self._mmc.getExposure()) / 1000.0
         repeat_delay_s = interval_s - scan_duration_s
         repeat_delay_ms = max(0, repeat_delay_s * 1000.0)
+
+        # Add a warning if no interval is set for a multi-timepoint acquisition
+        if num_timepoints > 1 and interval_s <= 0:
+            logger.warning(
+                "Acquisition has multiple timepoints but no interval is set. "
+                "The hardware will acquire all timepoints as fast as possible."
+            )
+        elif num_timepoints > 1 and repeat_delay_s < 0:
+            logger.warning(
+                "The requested time interval (%.2fs) is shorter than the Z-stack "
+                "duration (%.2fs). Subsequent timepoints will be acquired with "
+                "minimal delay.",
+                interval_s,
+                scan_duration_s,
+            )
 
         total_images_expected = num_z_slices * num_timepoints
         logger.info(
@@ -89,7 +105,7 @@ class AcquisitionWorker(QObject):
         try:
             # ----------------- ONE-TIME HARDWARE SETUP -----------------
             self._mmc.setAutoShutter(False)
-            if not set_camera_trigger_mode_level_high(self._mmc, self.HW):
+            if not set_camera_for_hardware_trigger(self._mmc, self.HW.camera_a_label):
                 raise RuntimeError("Failed to set camera to external trigger mode")
 
             step_size = self._get_z_step_size(self.sequence.z_plan)
@@ -116,8 +132,11 @@ class AcquisitionWorker(QObject):
             self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images_expected, 0, True)
             trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
 
-            # Create an iterator to emit the correct event with each image
-            events = iter(self.sequence)
+            # The MDASequence is immutable, so we create a new sequence object
+            # with the axis_order forced to match the hardware's physical
+            # acquisition order (T -> P -> Z -> C).
+            sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
+            events = iter(sequence)
 
             for i in range(total_images_expected):
                 if not self._running:
@@ -139,6 +158,11 @@ class AcquisitionWorker(QObject):
             logger.error("Error during acquisition", exc_info=True)
         finally:
             logger.info("Acquisition sequence finished. Cleaning up.")
+            # Set camera back to internal trigger mode
+            set_property(self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger")
+            logger.info(f"Camera {self.HW.camera_a_label} reverted to Internal Trigger.")
+            set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
+            logger.info("SPIMState reset to Idle.")
             self._mmc.stopSequenceAcquisition()
             self._mmc.setAutoShutter(original_autoshutter)
             self.acquisitionFinished.emit(self.sequence)
