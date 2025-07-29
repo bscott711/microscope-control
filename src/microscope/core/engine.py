@@ -1,5 +1,6 @@
 import logging
 import time
+from typing import Optional, Protocol
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
@@ -36,6 +37,13 @@ logger.addHandler(handler)
 logger.propagate = False
 
 
+# Define a protocol for the writer to satisfy the type checker
+class SupportsMDAEvents(Protocol):
+    def frameReady(self, frame, event, metadata): ...
+
+    def sequenceFinished(self, sequence): ...
+
+
 class AcquisitionWorker(QObject):
     """
     Worker object for running hardware-timed acquisitions in a separate thread.
@@ -50,12 +58,24 @@ class AcquisitionWorker(QObject):
     frameReady = Signal(object, object, object)
     acquisitionFinished = Signal(object)
 
-    def __init__(self, mmc: CMMCorePlus, sequence: MDASequence, parent=None):
+    def __init__(
+        self,
+        mmc: CMMCorePlus,
+        sequence: MDASequence,
+        writer: Optional[SupportsMDAEvents] = None,
+        parent: Optional[QObject] = None,
+    ):
         super().__init__(parent)
         self._mmc = mmc
         self.sequence = sequence
         self.HW = HardwareConstants()
         self._running = True
+
+        # If a writer is provided, connect its slots to this worker's signals
+        if writer:
+            self.frameReady.connect(writer.frameReady)
+            self.acquisitionFinished.connect(writer.sequenceFinished)
+            logger.info(f"Writer {type(writer).__name__} connected to acquisition worker.")
 
     def stop(self):
         """Stop the acquisition."""
@@ -210,12 +230,13 @@ class CustomPLogicMDAEngine(MDAEngine):
         self._worker = None
         self._thread = None
 
-    def run(self, sequence: MDASequence):
+    def run(self, sequence: MDASequence, writer: Optional[SupportsMDAEvents] = None):
         """Run an MDA sequence, delegating to the correct method."""
         if self._should_use_plogic(sequence):
             logger.info("Running custom PLogic Z-stack sequence")
             self._mmc.mda.events.sequenceStarted.emit(sequence, {})
-            self._worker = AcquisitionWorker(self._mmc, sequence)
+            # Pass the writer to the worker
+            self._worker = AcquisitionWorker(self._mmc, sequence, writer)
             self._thread = QThread()
             self._worker.moveToThread(self._thread)
 
@@ -254,5 +275,4 @@ class CustomPLogicMDAEngine(MDAEngine):
             self._thread.wait()
         self._thread = None
         self._worker = None
-        self._mmc.mda.events.sequenceFinished.emit(sequence)
         self._mmc.mda.events.sequenceFinished.emit(sequence)

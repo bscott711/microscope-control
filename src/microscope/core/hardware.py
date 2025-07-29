@@ -107,12 +107,15 @@ def send_tiger_command(mmc: CMMCorePlus, cmd: str) -> bool:
         return False
 
 
-def open_global_shutter(mmc: CMMCorePlus, hw=hw_constants):
+def open_global_shutter(mmc: CMMCorePlus, hw=None):
     """
     Configures and opens the global shutter on PLogic BNC3.
     This function programs a PLogic cell to be constantly high and routes it
     to the BNC3 output. This serves as a "microscope on" or global shutter signal.
     """
+    # Use the singleton if no instance was passed
+    if hw is None:
+        hw = hw_constants
     plogic_label = hw.plogic_label
     plogic_addr_prefix = plogic_label.split(":")[-1]
 
@@ -183,7 +186,7 @@ def close_global_shutter(mmc: CMMCorePlus, hw=hw_constants):
     return True
 
 
-def configure_plogic_for_dual_nrt_pulses(mmc: CMMCorePlus, settings: AcquisitionSettings, hw=hw_constants):
+def configure_plogic_for_dual_nrt_pulses(mmc: CMMCorePlus, settings: AcquisitionSettings, hw=None):
     """
     Configures PLogic to generate two independent, synchronized NRT one-shot pulses
     for the camera and laser triggers.
@@ -196,6 +199,9 @@ def configure_plogic_for_dual_nrt_pulses(mmc: CMMCorePlus, settings: Acquisition
     Returns:
         True if successful, False otherwise
     """
+    # Use the singleton if no instance was passed
+    if hw is None:
+        hw = hw_constants
     plogic_label = hw.plogic_label
     plogic_addr_prefix = plogic_label.split(":")[-1]
     hub_label = hw.tiger_comm_hub_label
@@ -251,7 +257,7 @@ def configure_plogic_for_dual_nrt_pulses(mmc: CMMCorePlus, settings: Acquisition
 
 
 def set_camera_trigger_mode_level_high(
-    mmc: CMMCorePlus, hw=hw_constants, desired_modes=("Level Trigger", "Edge Trigger")
+    mmc: CMMCorePlus, hw=None, desired_modes=("Level Trigger", "Edge Trigger")
 ) -> dict[str, bool]:
     """
     Sets the camera trigger mode for all specified cameras.
@@ -268,6 +274,9 @@ def set_camera_trigger_mode_level_high(
         A dictionary where keys are camera labels and values are booleans
         indicating if the full sequence of setting and reverting was successful.
     """
+    # Use the singleton if no instance was passed
+    if hw is None:
+        hw = hw_constants
     results = {}
     # Create a list of all cameras to configure
     camera_labels = [hw.camera_a_label, hw.camera_b_label]
@@ -348,7 +357,7 @@ def configure_galvo_for_spim_scan(
     num_slices: int,
     num_repeats: int,
     repeat_delay_ms: float,
-    hw=hw_constants,
+    hw=None,
 ):
     """
     Configures the Galvo device for SPIM scanning.
@@ -364,6 +373,9 @@ def configure_galvo_for_spim_scan(
     Returns:
         True if configuration succeeded
     """
+    # Use the singleton if no instance was passed
+    if hw is None:
+        hw = hw_constants
     galvo_label = hw.galvo_a_label
     logger.info(f"Configuring {galvo_label} for SPIM scan")
     try:
@@ -405,20 +417,26 @@ def trigger_spim_scan_acquisition(mmc: CMMCorePlus, galvo_label: str = hw_consta
         return False
 
 
-def enable_live_laser(mmc: CMMCorePlus, hw=hw_constants):
+def enable_live_laser(mmc: CMMCorePlus, hw=None):
     """
     Sets PLogic to preset 12 for live/snap mode laser output.
     """
+    # Use the singleton if no instance was passed
+    if hw is None:
+        hw = hw_constants
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
     cmd = f"{plogic_addr_prefix}CCA X=12"
     logger.info("Enabling laser for live/snap mode.")
     return send_tiger_command(mmc, cmd)
 
 
-def disable_live_laser(mmc: CMMCorePlus, hw=hw_constants):
+def disable_live_laser(mmc: CMMCorePlus, hw=None):
     """
     Sets PLogic to preset 10 to disable laser output after live/snap.
     """
+    # Use the singleton if no instance was passed
+    if hw is None:
+        hw = hw_constants
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
     cmd = f"{plogic_addr_prefix}CCA X=10"
     logger.info("Disabling laser for live/snap mode.")

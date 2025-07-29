@@ -3,22 +3,27 @@
 import logging
 import sys
 from functools import wraps
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 from pymmcore_gui import WidgetAction, create_mmgui
 from pymmcore_gui.actions import core_actions
 from pymmcore_plus import CMMCorePlus
+
+# Import OMETiffWriter
+from pymmcore_plus.mda.handlers import ImageSequenceWriter, OMETiffWriter, OMEZarrWriter
 from qtpy.QtWidgets import QApplication
 from useq import MDASequence
 
 from microscope.core.constants import HardwareConstants
-from microscope.core.engine import CustomPLogicMDAEngine
+
+# Import the protocol from engine.py
+from microscope.core.engine import CustomPLogicMDAEngine, SupportsMDAEvents
 from microscope.core.hardware import (
     close_global_shutter,
     disable_live_laser,
     enable_live_laser,
     open_global_shutter,
-    set_camera_trigger_mode_level_high,  # Import the new function
+    set_camera_trigger_mode_level_high,
 )
 
 # Set up logger
@@ -50,15 +55,6 @@ def main():
             """A one-shot callback to turn off the laser and beam after snap."""
             logger.debug("snap_cleanup: Disabling PLogic laser output.")
             disable_live_laser(mmc, HW)
-            plogic_device = mmc.getShutterDevice()
-            plogic_state = mmc.getProperty(plogic_device, "OutputChannel")
-            logger.info(f"Read PLogic state after disabling laser: {plogic_state}")
-
-            logger.debug("Disabling SPIM beam after snap.")
-            mmc.setProperty(HW.galvo_a_label, "BeamEnabled", "No")
-            beam_state = mmc.getProperty(HW.galvo_a_label, "BeamEnabled")
-            logger.info(f"Read beam state after disabling: {beam_state}")
-
             logger.debug("snap_cleanup: Disconnecting one-shot signal.")
             mmc.events.imageSnapped.disconnect(snap_cleanup)
             logger.info("Laser and beam disabled. Snap cleanup complete.")
@@ -67,21 +63,12 @@ def main():
         def snap_with_laser(*args, **kwargs):
             """Wrapper that enables the beam, turns the laser on, snaps, and schedules cleanup."""
             logger.info("Snap action triggered: entering laser/beam control wrapper.")
-
             logger.debug("Enabling SPIM beam for snap...")
             mmc.setProperty(HW.galvo_a_label, "BeamEnabled", "Yes")
-            beam_state = mmc.getProperty(HW.galvo_a_label, "BeamEnabled")
-            logger.info(f"Read beam state after enabling: {beam_state}")
-
             logger.debug("Enabling PLogic laser output for snap...")
             enable_live_laser(mmc, HW)
-            plogic_device = mmc.getShutterDevice()
-            plogic_state = mmc.getProperty(plogic_device, "OutputChannel")
-            logger.info(f"Read PLogic state after enabling laser: {plogic_state}")
-
             logger.debug("Connecting snap_cleanup to imageSnapped signal.")
             mmc.events.imageSnapped.connect(snap_cleanup)
-
             logger.debug("Calling original snap function...")
             original_snap_func(*args, **kwargs)
 
@@ -99,33 +86,15 @@ def main():
             if mmc.isSequenceRunning():
                 logger.debug("Live mode is ON. Will be stopped.")
                 original_live_func(*args, **kwargs)
-
                 logger.debug("Disabling PLogic laser output after live mode...")
                 disable_live_laser(mmc, HW)
-                plogic_device = mmc.getShutterDevice()
-                plogic_state = mmc.getProperty(plogic_device, "OutputChannel")
-                logger.info(f"Read PLogic state after disabling laser: {plogic_state}")
-
-                logger.debug("Disabling SPIM beam after live mode...")
-                mmc.setProperty(HW.galvo_a_label, "BeamEnabled", "No")
-                beam_state = mmc.getProperty(HW.galvo_a_label, "BeamEnabled")
-                logger.info(f"Read beam state after disabling: {beam_state}")
-
-                logger.info("Live mode, laser, and beam disabled.")
+                logger.info("Live mode and laser disabled.")
             else:
                 logger.debug("Live mode is OFF. Will be started.")
-
                 logger.debug("Enabling SPIM beam for live mode...")
                 mmc.setProperty(HW.galvo_a_label, "BeamEnabled", "Yes")
-                beam_state = mmc.getProperty(HW.galvo_a_label, "BeamEnabled")
-                logger.info(f"Read beam state after enabling: {beam_state}")
-
                 logger.debug("Enabling PLogic laser output for live mode...")
                 enable_live_laser(mmc, HW)
-                plogic_device = mmc.getShutterDevice()
-                plogic_state = mmc.getProperty(plogic_device, "OutputChannel")
-                logger.info(f"Read PLogic state after enabling laser: {plogic_state}")
-
                 logger.debug("Starting live mode...")
                 original_live_func(*args, **kwargs)
                 logger.info("Live mode, laser, and beam enabled.")
@@ -157,12 +126,61 @@ def main():
     if mda_widget:
 
         def mda_runner(output=None):
-            """Wrapper to call our engine from the GUI."""
+            """Wrapper that creates a writer and passes it to our custom engine."""
             sequence: MDASequence = mda_widget.value()
-            engine.run(sequence)
+            writer: Optional[SupportsMDAEvents] = None # Explicitly type the writer variable
+
+            if output:
+                save_path = output
+                # Get format and overwrite settings using the widget's public API
+                # Safer default handling using hasattr and explicit checks
+                save_format = "ome-tiff" # Default changed to ome-tiff
+                if hasattr(mda_widget, "save_format"):
+                    save_format_callable = getattr(mda_widget, "save_format")
+                    if callable(save_format_callable):
+                         tmp_format = save_format_callable()
+                         if isinstance(tmp_format, str): # Extra safety check
+                            save_format = tmp_format
+
+                overwrite = False # Default
+                if hasattr(mda_widget, "overwrite"):
+                    overwrite_callable = getattr(mda_widget, "overwrite")
+                    if callable(overwrite_callable):
+                        tmp_overwrite = overwrite_callable()
+                        # Explicitly cast to bool to satisfy type checker
+                        overwrite = bool(tmp_overwrite)
+
+                logger.info(f"Saving is enabled. Format: {save_format}, Path: {save_path}")
+
+                # Create the appropriate writer based on the format
+                if save_format == "ome-zarr":
+                    writer_instance = OMEZarrWriter(save_path, overwrite=overwrite)
+                    # Cast the instance to the protocol type for type checker
+                    writer = cast(SupportsMDAEvents, writer_instance)
+                    logger.info("OME-Zarr writer created.")
+                elif save_format == "ome-tiff":
+                    # Use the specific OME-TIFF writer
+                    writer_instance = OMETiffWriter(save_path)
+                    # Cast the instance to the protocol type for type checker
+                    writer = cast(SupportsMDAEvents, writer_instance)
+                    logger.info("OME-TIFF writer created.")
+                elif save_format == "tiff-sequence":
+                     # Use ImageSequenceWriter for plain TIFF sequences if needed
+                     writer_instance = ImageSequenceWriter(save_path, overwrite=overwrite)
+                     # Cast the instance to the protocol type for type checker
+                     writer = cast(SupportsMDAEvents, writer_instance)
+                     logger.info("TIFF-Sequence writer created.")
+                else:
+                    logger.warning(f"Unknown save format '{save_format}'. No writer will be created.")
+
+            # Pass the writer (or None) directly to the engine.
+            # The engine's worker will connect its signals to the writer's methods.
+            # No WriterAdapter needed.
+            # Cast the writer again before passing to ensure type compatibility at call site
+            engine.run(sequence, cast(Optional[SupportsMDAEvents], writer))
 
         mda_widget.execute_mda = mda_runner
-        logger.info("MDA 'Run' button has been wired to use CustomPLogicMDAEngine.")
+        logger.info("MDA 'Run' button has been wired to support saving with CustomPLogicMDAEngine.")
     else:
         logger.warning("Could not find MDA widget to intercept.")
 
@@ -170,13 +188,9 @@ def main():
         """Clean up hardware state when the application quits."""
         logger.info("Application closing. Ensuring SPIM beam is disabled.")
         mmc.setProperty(HW.galvo_a_label, "BeamEnabled", "No")
-        beam_state = mmc.getProperty(HW.galvo_a_label, "BeamEnabled")
-        logger.info(f"Final beam state: {beam_state}")
-
         logger.info("Closing global shutter.")
         close_global_shutter(mmc, HW)
 
-        # Restore the original functions on exit
         if original_snap_func:
             core_actions.snap_action.on_triggered = original_snap_func
         if original_live_func:
