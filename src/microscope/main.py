@@ -3,21 +3,17 @@
 import logging
 import sys
 from functools import wraps
-from typing import Callable, Optional, cast
+from typing import Callable, Optional
 
 from pymmcore_gui import WidgetAction, create_mmgui
 from pymmcore_gui.actions import core_actions
 from pymmcore_plus import CMMCorePlus
-
-# Import OMETiffWriter
-from pymmcore_plus.mda.handlers import ImageSequenceWriter, OMETiffWriter, OMEZarrWriter
+from pymmcore_plus.mda.handlers import ImageSequenceWriter, OMEZarrWriter
 from qtpy.QtWidgets import QApplication
 from useq import MDASequence
 
 from microscope.core.constants import HardwareConstants
-
-# Import the protocol from engine.py
-from microscope.core.engine import CustomPLogicMDAEngine, SupportsMDAEvents
+from microscope.core.engine import CustomPLogicMDAEngine
 from microscope.core.hardware import (
     close_global_shutter,
     disable_live_laser,
@@ -55,6 +51,8 @@ def main():
             """A one-shot callback to turn off the laser and beam after snap."""
             logger.debug("snap_cleanup: Disabling PLogic laser output.")
             disable_live_laser(mmc, HW)
+            logger.debug("Disabling SPIM beam after snap.")
+            mmc.setProperty(HW.galvo_a_label, "BeamEnabled", "No")
             logger.debug("snap_cleanup: Disconnecting one-shot signal.")
             mmc.events.imageSnapped.disconnect(snap_cleanup)
             logger.info("Laser and beam disabled. Snap cleanup complete.")
@@ -88,7 +86,9 @@ def main():
                 original_live_func(*args, **kwargs)
                 logger.debug("Disabling PLogic laser output after live mode...")
                 disable_live_laser(mmc, HW)
-                logger.info("Live mode and laser disabled.")
+                logger.debug("Disabling SPIM beam after live mode...")
+                mmc.setProperty(HW.galvo_a_label, "BeamEnabled", "No")
+                logger.info("Live mode, laser, and beam disabled.")
             else:
                 logger.debug("Live mode is OFF. Will be started.")
                 logger.debug("Enabling SPIM beam for live mode...")
@@ -128,51 +128,42 @@ def main():
         def mda_runner(output=None):
             """Wrapper that creates a writer and passes it to our custom engine."""
             sequence: MDASequence = mda_widget.value()
-            writer: Optional[SupportsMDAEvents] = None  # Explicitly type the writer variable
+            writer = None
 
             if output:
                 save_path = output
-                # Get format and overwrite settings using the widget's public API
-                # Safer default handling using hasattr and explicit checks
-                save_format = "ome-tiff"  # Default changed to ome-tiff
-                if hasattr(mda_widget, "save_format"):
-                    save_format_callable = getattr(mda_widget, "save_format")
-                    if callable(save_format_callable):
-                        tmp_format = save_format_callable()
-                        if isinstance(tmp_format, str):  # Extra safety check
-                            save_format = tmp_format
-
-                overwrite = False  # Default
-                if hasattr(mda_widget, "overwrite"):
-                    overwrite_callable = getattr(mda_widget, "overwrite")
-                    if callable(overwrite_callable):
-                        tmp_overwrite = overwrite_callable()
-                        # Explicitly cast to bool to satisfy type checker
-                        overwrite = bool(tmp_overwrite)
+                save_format = getattr(mda_widget, "save_format", "ome-tiff")
+                overwrite = getattr(mda_widget, "overwrite", False)
 
                 logger.info(f"Saving is enabled. Format: {save_format}, Path: {save_path}")
-
-                # Create the appropriate writer based on the format
                 if save_format == "ome-zarr":
-                    writer_instance = OMEZarrWriter(save_path, overwrite=overwrite)
-                    # Cast the instance to the protocol type for type checker
-                    writer = cast(SupportsMDAEvents, writer_instance)
+                    writer = OMEZarrWriter(save_path, overwrite=overwrite)
                     logger.info("OME-Zarr writer created.")
                 elif save_format == "ome-tiff":
-                    # Use the specific OME-TIFF writer
-                    writer_instance = OMETiffWriter(save_path)
-                    # Cast the instance to the protocol type for type checker
-                    writer = cast(SupportsMDAEvents, writer_instance)
+                    writer = ImageSequenceWriter(save_path, overwrite=overwrite)
                     logger.info("OME-TIFF writer created.")
-                elif save_format == "tiff-sequence":
-                    # Use ImageSequenceWriter for plain TIFF sequences if needed
-                    writer_instance = ImageSequenceWriter(save_path, overwrite=overwrite)
-                    # Cast the instance to the protocol type for type checker
-                    writer = cast(SupportsMDAEvents, writer_instance)
-                    logger.info("TIFF-Sequence writer created.")
                 else:
                     logger.warning(f"Unknown save format '{save_format}'. No writer will be created.")
-            engine.run(sequence, writer)
+
+            if writer is not None:
+
+                class WriterAdapter:
+                    def __init__(self, writer):
+                        self._writer = writer
+
+                    def sequenceStarted(self, sequence):
+                        self._writer.sequenceStarted(sequence)
+
+                    def frameReady(self, frame, event, metadata):
+                        self._writer.frameReady(frame, event, metadata)
+
+                    def sequenceFinished(self, sequence):
+                        self._writer.sequenceFinished(sequence)
+
+                writer_adapter = WriterAdapter(writer)
+                engine.run(sequence, writer_adapter)
+            else:
+                engine.run(sequence, None)
 
         mda_widget.execute_mda = mda_runner
         logger.info("MDA 'Run' button has been wired to support saving with CustomPLogicMDAEngine.")
