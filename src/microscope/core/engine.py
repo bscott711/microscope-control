@@ -42,93 +42,40 @@ logger.propagate = False
 
 class AcquisitionWorker(QObject):
     """
-    Worker object for running hardware-timed acquisitions in a separate thread.
-    It emits signals that the engine can then relay to the main event bus.
+    Worker object for polling for images in a separate thread.
     """
 
-    frameReady = Signal(object, object, object)  # image, event, metadata
-    acquisitionFinished = Signal(object)  # sequence
+    frameReady = Signal(object, object, object)
+    acquisitionFinished = Signal(object)
+    acquisitionError = Signal(str)
 
     def __init__(
         self,
         mmc: CMMCorePlus,
         sequence: MDASequence,
+        total_images: int,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
         self._mmc = mmc
         self.sequence = sequence
-        self.HW = HardwareConstants()
+        self.total_images = total_images
         self._running = True
 
     def stop(self):
-        """Stop the acquisition."""
         self._running = False
-        logger.info("Acquisition stop requested.")
 
     def run(self):
-        """Execute a hardware-timed MDA sequence."""
-        original_autoshutter = self._mmc.getAutoShutter()
-
-        if not self.sequence.z_plan:
-            logger.error("PLogic acquisition requires a Z-plan.")
-            return
-
-        # --- Get sequence parameters ---
-        num_z_slices = len(list(self.sequence.z_plan))
-        num_timepoints = self.sequence.shape[0]
-        interval_s = self._get_time_interval_s(self.sequence.time_plan)
-        scan_duration_s = (num_z_slices * self._mmc.getExposure()) / 1000.0
-        repeat_delay_s = interval_s - scan_duration_s
-        repeat_delay_ms = max(0, repeat_delay_s * 1000.0)
-
-        total_images_expected = num_z_slices * num_timepoints
-        logger.info(
-            "Starting hardware-timed series: %d timepoints, %d z-slices, %.2f ms interval",
-            num_timepoints,
-            num_z_slices,
-            repeat_delay_ms,
-        )
-
+        """Polls for images from the camera sequence buffer."""
         try:
-            # ----------------- ONE-TIME HARDWARE SETUP -----------------
-            self._mmc.setAutoShutter(False)
-            if not set_camera_for_hardware_trigger(self._mmc, self.HW.camera_a_label):
-                raise RuntimeError("Failed to set camera to external trigger mode")
-
-            step_size = self._get_z_step_size(self.sequence.z_plan)
-            settings = AcquisitionSettings(
-                num_slices=num_z_slices,
-                step_size_um=step_size,
-                camera_exposure_ms=self._mmc.getExposure(),
-            )
-            configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
-
-            z_positions = list(self.sequence.z_plan)
-            if len(z_positions) > 1:
-                z_range = max(z_positions) - min(z_positions)
-                galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
-            else:
-                galvo_amplitude_deg = 0
-
-            configure_galvo_for_spim_scan(
-                self._mmc,
-                galvo_amplitude_deg,
-                num_z_slices,
-                num_repeats=num_timepoints,
-                repeat_delay_ms=repeat_delay_ms,
-                hw=self.HW,
-            )
-            # ---------------------------------------------------------
-
-            # ---- SINGLE TRIGGER AND COLLECTION LOOP ----
-            self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images_expected, 0, True)
-            trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
+            if self.total_images == 0:
+                logger.warning("Acquisition sequence has no images. Worker exiting.")
+                return
 
             sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
             events = iter(sequence)
 
-            for i in range(total_images_expected):
+            for i in range(self.total_images):
                 if not self._running:
                     break
                 while self._mmc.getRemainingImageCount() == 0:
@@ -140,33 +87,14 @@ class AcquisitionWorker(QObject):
                 event = next(events)
                 meta = frame_metadata(self._mmc, mda_event=event)
                 self.frameReady.emit(tagged_img.pix, event, meta)
-                logger.debug(f"Frame collected: {event.index}")
+                logger.info(f"Frame collected: {event.index}")
 
-        except Exception as _e:
-            logger.error("Error during acquisition", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error in acquisition worker thread: {e}", exc_info=True)
+            self.acquisitionError.emit(str(e))
         finally:
-            logger.info("Acquisition sequence finished. Cleaning up.")
-            set_property(self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger")
-            set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
-            self._mmc.stopSequenceAcquisition()
-            self._mmc.setAutoShutter(original_autoshutter)
             self.acquisitionFinished.emit(self.sequence)
-            logger.info("Custom PLogic acquisition worker finished.")
-
-    def _get_z_step_size(self, z_plan) -> float:
-        if isinstance(z_plan, (ZRangeAround, ZAboveBelow)):
-            return z_plan.step
-        if z_plan and len(z_plan) > 1:
-            positions = list(z_plan)
-            return abs(positions[1] - positions[0])
-        return 0.0
-
-    def _get_time_interval_s(self, time_plan) -> float:
-        if isinstance(time_plan, TIntervalLoops):
-            return time_plan.interval.total_seconds()
-        if isinstance(time_plan, MultiPhaseTimePlan) and time_plan.phases:
-            return self._get_time_interval_s(time_plan.phases[0])
-        return 0.0
+            logger.info("Acquisition worker polling finished.")
 
 
 class CustomPLogicMDAEngine(MDAEngine):
@@ -175,53 +103,114 @@ class CustomPLogicMDAEngine(MDAEngine):
     events: MDASignaler
 
     def __init__(self):
-        """
-        Initialize the engine.
-        This calls the parent constructor and then defensively ensures
-        that the `events` attribute has been created.
-        """
         mmc = CMMCorePlus.instance()
         super().__init__(mmc)
-
         if not hasattr(self, "events"):
             self.events = MDASignaler()
-
         self.HW = HardwareConstants()
         self._worker: AcquisitionWorker | None = None
         self._thread: QThread | None = None
+        self._original_autoshutter: bool | None = None
 
     def run(self, sequence: MDASequence):
-        """
-        Run an MDA sequence.
-        If the sequence is suited for PLogic, it runs the hardware-timed routine.
-        Otherwise, it falls back to the default software-timed engine.
-        """
         if self._should_use_plogic(sequence):
-            logger.info("Running custom PLogic Z-stack sequence")
             self._run_plogic_acquisition(sequence)
         else:
-            logger.info("Falling back to default MDA engine")
             super().run(sequence)  # type: ignore
 
+    def setup_hardware(self, sequence: MDASequence, total_images: int):
+        """Configure all hardware for the PLogic acquisition. Runs in main thread."""
+        logger.info("Configuring hardware from main thread...")
+        self._original_autoshutter = self._mmc.getAutoShutter()
+        self._mmc.setAutoShutter(False)
+
+        if not set_camera_for_hardware_trigger(self._mmc, self.HW.camera_a_label):
+            raise RuntimeError("Failed to set camera to external trigger mode")
+
+        z_plan = sequence.z_plan
+        if not z_plan:
+            raise ValueError("PLogic acquisition requires a z_plan.")
+
+        num_z_slices = len(list(z_plan))
+        step_size = self._get_z_step_size(z_plan)
+        exposure_ms = self._mmc.getExposure()
+        scan_duration_ms = num_z_slices * exposure_ms
+        time_interval_s = self._get_time_interval_s(sequence.time_plan)
+        repeat_delay_ms = max(0, (time_interval_s * 1000) - scan_duration_ms)
+
+        settings = AcquisitionSettings(
+            num_slices=num_z_slices,
+            step_size_um=step_size,
+            camera_exposure_ms=exposure_ms,
+        )
+        configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
+
+        z_positions = list(z_plan)
+        z_range = max(z_positions) - min(z_positions) if len(z_positions) > 1 else 0
+        galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
+        num_timepoints = int(total_images / num_z_slices) if num_z_slices > 0 else 0
+
+        configure_galvo_for_spim_scan(
+            self._mmc,
+            galvo_amplitude_deg,
+            num_slices=num_z_slices,
+            num_repeats=num_timepoints,
+            repeat_delay_ms=repeat_delay_ms,
+            hw=self.HW,
+        )
+
+    def cleanup_hardware(self):
+        """Reset all hardware post-acquisition. Runs in main thread."""
+        logger.info("Cleaning up hardware from main thread...")
+        set_property(self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger")
+        set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
+        if self._mmc.isSequenceRunning():
+            self._mmc.stopSequenceAcquisition()
+        if self._original_autoshutter is not None:
+            self._mmc.setAutoShutter(self._original_autoshutter)
+
     def _run_plogic_acquisition(self, sequence: MDASequence):
-        """Sets up and starts the AcquisitionWorker in a blocking fashion."""
-        self._worker = AcquisitionWorker(self._mmc, sequence)
-        self._thread = QThread()
-        self._worker.moveToThread(self._thread)
-
-        self._worker.frameReady.connect(self._on_frame_ready)
-        self._worker.acquisitionFinished.connect(self._on_acquisition_finished)
-        self._thread.started.connect(self._worker.run)
-
-        loop = QEventLoop()
-        self.events.sequenceFinished.connect(lambda: loop.quit())
-
+        """Sets up hardware, runs worker, and cleans up, all in a blocking fashion."""
+        total_images = sum(1 for _ in sequence)
         try:
+            self.setup_hardware(sequence, total_images)
+
+            self._worker = AcquisitionWorker(self._mmc, sequence, total_images)
+            self._thread = QThread()
+            self._worker.moveToThread(self._thread)
+
+            self._worker.frameReady.connect(self._on_frame_ready)
+            self._worker.acquisitionFinished.connect(self._on_acquisition_finished)
+            self._thread.started.connect(self._worker.run)
+
+            self._mmc.startSequenceAcquisition(total_images, 0, True)
+            trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
+
+            loop = QEventLoop()
+            self.events.sequenceFinished.connect(lambda: loop.quit())
             self.events.sequenceStarted.emit(sequence)
+
             self._thread.start()
             loop.exec_()
+
+        except Exception as e:
+            logger.error(f"Error during PLogic acquisition setup: {e}", exc_info=True)
+            self.events.sequenceFinished.emit(sequence)
         finally:
-            self.events.sequenceFinished.disconnect(loop.quit)
+            self.cleanup_hardware()
+
+    def _on_frame_ready(self, frame, event, meta):
+        self.events.frameReady.emit(frame, event, meta)
+
+    def _on_acquisition_finished(self, sequence):
+        """This slot now only cleans up the thread and emits the final event."""
+        if self._thread:
+            self._thread.quit()
+            self._thread.wait()
+        self._thread = None
+        self._worker = None
+        self.events.sequenceFinished.emit(sequence)
+        logger.info("Custom PLogic MDAEngine finished.")
 
     def _should_use_plogic(self, sequence: MDASequence) -> bool:
         """Check if the Core Focus device is the designated Piezo stage."""
@@ -232,16 +221,19 @@ class CustomPLogicMDAEngine(MDAEngine):
             logger.warning(f"Could not verify Core Focus device: {e}")
             return False
 
-    def _on_frame_ready(self, frame, event, meta):
-        """Slot to receive frame from worker and emit on the engine's event bus."""
-        self.events.frameReady.emit(frame, event, meta)
+    def _get_z_step_size(self, z_plan) -> float:
+        """Safely get the Z-step size from any Z-plan object."""
+        if isinstance(z_plan, (ZRangeAround, ZAboveBelow)):
+            return z_plan.step
+        if z_plan and len(z_plan) > 1:
+            positions = list(z_plan)
+            return abs(positions[1] - positions[0])
+        return 0.0
 
-    def _on_acquisition_finished(self, sequence):
-        """Slot to clean up and emit the sequenceFinished event."""
-        if self._thread:
-            self._thread.quit()
-            self._thread.wait()
-        self._thread = None
-        self._worker = None
-        self.events.sequenceFinished.emit(sequence)
-        logger.info("Custom PLogic MDAEngine finished.")
+    def _get_time_interval_s(self, time_plan) -> float:
+        """Safely get the time interval in seconds from any TimePlan object."""
+        if isinstance(time_plan, TIntervalLoops):
+            return time_plan.interval.total_seconds()
+        if isinstance(time_plan, MultiPhaseTimePlan) and time_plan.phases:
+            return self._get_time_interval_s(time_plan.phases[0])
+        return 0.0
