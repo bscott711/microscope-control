@@ -1,11 +1,14 @@
+# src/microscope/core/engine.py
+
 import logging
 import time
-from typing import Optional, Protocol
+from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
+from pymmcore_plus.mda.events import MDASignaler
 from pymmcore_plus.metadata import frame_metadata
-from qtpy.QtCore import QObject, QThread, Signal  # type: ignore
+from qtpy.QtCore import QEventLoop, QObject, QThread, Signal  # type: ignore
 from useq import (
     MDASequence,
     MultiPhaseTimePlan,
@@ -37,33 +40,19 @@ logger.addHandler(handler)
 logger.propagate = False
 
 
-# Define a protocol for the writer to satisfy the type checker
-# This now includes sequenceStarted, which is crucial for initializing writers.
-class SupportsMDAEvents(Protocol):
-    def sequenceStarted(self, sequence: MDASequence): ...
-    def frameReady(self, frame, event, metadata): ...
-    def sequenceFinished(self, sequence): ...
-
-
 class AcquisitionWorker(QObject):
     """
     Worker object for running hardware-timed acquisitions in a separate thread.
-
-    Signals:
-        frameReady (object, object, object): Emitted when a new frame is ready.
-                                              Provides (image, event, metadata).
-        acquisitionFinished (object): Emitted when the acquisition is finished.
-                                      Provides the sequence object.
+    It emits signals that the engine can then relay to the main event bus.
     """
 
-    frameReady = Signal(object, object, object)
-    acquisitionFinished = Signal(object)
+    frameReady = Signal(object, object, object)  # image, event, metadata
+    acquisitionFinished = Signal(object)  # sequence
 
     def __init__(
         self,
         mmc: CMMCorePlus,
         sequence: MDASequence,
-        writer: Optional[SupportsMDAEvents] = None,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -72,15 +61,10 @@ class AcquisitionWorker(QObject):
         self.HW = HardwareConstants()
         self._running = True
 
-        # If a writer is provided, connect its slots to this worker's signals
-        if writer:
-            self.frameReady.connect(writer.frameReady)
-            self.acquisitionFinished.connect(writer.sequenceFinished)
-            logger.info(f"Writer {type(writer).__name__} connected to acquisition worker.")
-
     def stop(self):
         """Stop the acquisition."""
         self._running = False
+        logger.info("Acquisition stop requested.")
 
     def run(self):
         """Execute a hardware-timed MDA sequence."""
@@ -94,26 +78,9 @@ class AcquisitionWorker(QObject):
         num_z_slices = len(list(self.sequence.z_plan))
         num_timepoints = self.sequence.shape[0]
         interval_s = self._get_time_interval_s(self.sequence.time_plan)
-        # The controller delay is from the end of one scan to the start of the next.
-        # We must subtract the time it takes to acquire one z-stack.
         scan_duration_s = (num_z_slices * self._mmc.getExposure()) / 1000.0
         repeat_delay_s = interval_s - scan_duration_s
         repeat_delay_ms = max(0, repeat_delay_s * 1000.0)
-
-        # Add a warning if no interval is set for a multi-timepoint acquisition
-        if num_timepoints > 1 and interval_s <= 0:
-            logger.warning(
-                "Acquisition has multiple timepoints but no interval is set. "
-                "The hardware will acquire all timepoints as fast as possible."
-            )
-        elif num_timepoints > 1 and repeat_delay_s < 0:
-            logger.warning(
-                "The requested time interval (%.2fs) is shorter than the Z-stack "
-                "duration (%.2fs). Subsequent timepoints will be acquired with "
-                "minimal delay.",
-                interval_s,
-                scan_duration_s,
-            )
 
         total_images_expected = num_z_slices * num_timepoints
         logger.info(
@@ -137,19 +104,12 @@ class AcquisitionWorker(QObject):
             )
             configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
 
-            # Calculate the required galvo amplitude from the z-plan range
             z_positions = list(self.sequence.z_plan)
             if len(z_positions) > 1:
                 z_range = max(z_positions) - min(z_positions)
                 galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
-                logger.info(
-                    "Calculated galvo amplitude of %.4f deg for a Z-range of %.2f um.",
-                    galvo_amplitude_deg,
-                    z_range,
-                )
             else:
                 galvo_amplitude_deg = 0
-                logger.info("Z-plan has fewer than 2 points. Setting galvo amplitude to 0.")
 
             configure_galvo_for_spim_scan(
                 self._mmc,
@@ -159,16 +119,12 @@ class AcquisitionWorker(QObject):
                 repeat_delay_ms=repeat_delay_ms,
                 hw=self.HW,
             )
-            logger.info("Hardware configured for full time-series.")
             # ---------------------------------------------------------
 
             # ---- SINGLE TRIGGER AND COLLECTION LOOP ----
             self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images_expected, 0, True)
             trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
 
-            # The MDASequence is immutable, so we create a new sequence object
-            # with the axis_order forced to match the hardware's physical
-            # acquisition order (T -> P -> Z -> C).
             sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
             events = iter(sequence)
 
@@ -176,7 +132,7 @@ class AcquisitionWorker(QObject):
                 if not self._running:
                     break
                 while self._mmc.getRemainingImageCount() == 0:
-                    if not self._mmc.isSequenceRunning():
+                    if not self._mmc.isSequenceRunning() and self._running:
                         raise RuntimeError("Camera sequence stopped unexpectedly.")
                     time.sleep(0.001)
 
@@ -186,24 +142,18 @@ class AcquisitionWorker(QObject):
                 self.frameReady.emit(tagged_img.pix, event, meta)
                 logger.debug(f"Frame collected: {event.index}")
 
-            logger.info("Hardware-driven time-series complete.")
-
         except Exception as _e:
             logger.error("Error during acquisition", exc_info=True)
         finally:
             logger.info("Acquisition sequence finished. Cleaning up.")
-            # Set camera back to internal trigger mode
             set_property(self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger")
-            logger.info(f"Camera {self.HW.camera_a_label} reverted to Internal Trigger.")
             set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
-            logger.info("SPIMState reset to Idle.")
             self._mmc.stopSequenceAcquisition()
             self._mmc.setAutoShutter(original_autoshutter)
             self.acquisitionFinished.emit(self.sequence)
-            logger.info("Custom PLogic Z-stack completed.")
+            logger.info("Custom PLogic acquisition worker finished.")
 
     def _get_z_step_size(self, z_plan) -> float:
-        """Safely get the Z-step size from any Z-plan object."""
         if isinstance(z_plan, (ZRangeAround, ZAboveBelow)):
             return z_plan.step
         if z_plan and len(z_plan) > 1:
@@ -212,7 +162,6 @@ class AcquisitionWorker(QObject):
         return 0.0
 
     def _get_time_interval_s(self, time_plan) -> float:
-        """Safely get the time interval in seconds from any TimePlan object."""
         if isinstance(time_plan, TIntervalLoops):
             return time_plan.interval.total_seconds()
         if isinstance(time_plan, MultiPhaseTimePlan) and time_plan.phases:
@@ -223,70 +172,76 @@ class AcquisitionWorker(QObject):
 class CustomPLogicMDAEngine(MDAEngine):
     """Custom MDA engine for PLogic-driven SPIM Z-stacks."""
 
-    def __init__(self):
-        """Initialize the engine and fetch the CMMCorePlus instance."""
-        self._mmc = CMMCorePlus.instance()
-        super().__init__(self._mmc)
-        self.HW = HardwareConstants()
-        self._worker = None
-        self._thread = None
+    events: MDASignaler
 
-    def run(self, sequence: MDASequence, writer: Optional[SupportsMDAEvents] = None):
-        """Run an MDA sequence, delegating to the correct method."""
+    def __init__(self):
+        """
+        Initialize the engine.
+        This calls the parent constructor and then defensively ensures
+        that the `events` attribute has been created.
+        """
+        mmc = CMMCorePlus.instance()
+        super().__init__(mmc)
+
+        if not hasattr(self, "events"):
+            self.events = MDASignaler()
+
+        self.HW = HardwareConstants()
+        self._worker: AcquisitionWorker | None = None
+        self._thread: QThread | None = None
+
+    def run(self, sequence: MDASequence):
+        """
+        Run an MDA sequence.
+        If the sequence is suited for PLogic, it runs the hardware-timed routine.
+        Otherwise, it falls back to the default software-timed engine.
+        """
         if self._should_use_plogic(sequence):
             logger.info("Running custom PLogic Z-stack sequence")
-
-            # **FIX:** Manually initialize the writer before starting the acquisition.
-            # This call is necessary for writers like OMETiffWriter to open the
-            # file and prepare for receiving frames.
-            if writer:
-                try:
-                    writer.sequenceStarted(sequence)
-                    logger.info(f"Writer {type(writer).__name__} initialized.")
-                except Exception as e:
-                    logger.error(f"Failed to initialize writer: {e}", exc_info=True)
-                    # Invalidate writer to prevent further errors
-                    writer = None
-
-            self._mmc.mda.events.sequenceStarted.emit(sequence, {})
-            # Pass the (possibly now None) writer to the worker
-            self._worker = AcquisitionWorker(self._mmc, sequence, writer)
-            self._thread = QThread()
-            self._worker.moveToThread(self._thread)
-
-            # Connect signals
-            self._worker.frameReady.connect(self._on_frame_ready)
-            self._thread.started.connect(self._worker.run)
-            self._worker.acquisitionFinished.connect(self._on_acquisition_finished)
-
-            self._thread.start()
+            self._run_plogic_acquisition(sequence)
         else:
             logger.info("Falling back to default MDA engine")
-            self._mmc.run_mda(sequence)
+            super().run(sequence)  # type: ignore
+
+    def _run_plogic_acquisition(self, sequence: MDASequence):
+        """Sets up and starts the AcquisitionWorker in a blocking fashion."""
+        self._worker = AcquisitionWorker(self._mmc, sequence)
+        self._thread = QThread()
+        self._worker.moveToThread(self._thread)
+
+        self._worker.frameReady.connect(self._on_frame_ready)
+        self._worker.acquisitionFinished.connect(self._on_acquisition_finished)
+        self._thread.started.connect(self._worker.run)
+
+        loop = QEventLoop()
+        self.events.sequenceFinished.connect(lambda: loop.quit())
+
+        try:
+            self.events.sequenceStarted.emit(sequence)
+            self._thread.start()
+            loop.exec_()
+        finally:
+            self.events.sequenceFinished.disconnect(loop.quit)
 
     def _should_use_plogic(self, sequence: MDASequence) -> bool:
         """Check if the Core Focus device is the designated Piezo stage."""
         try:
             current_focus_device = self._mmc.getProperty("Core", "Focus")
-            result = current_focus_device == "PiezoStage:P:34"
-            logger.debug(
-                f"Checking Core Focus. Current: '{current_focus_device}'. "
-                f"Required: 'PiezoStage:P:34'. Should use PLogic? {result}"
-            )
-            return result
+            return current_focus_device == self.HW.piezo_a_label
         except Exception as e:
-            logger.warning("Could not verify Core Focus device, falling back. Error: %s", e)
+            logger.warning(f"Could not verify Core Focus device: {e}")
             return False
 
     def _on_frame_ready(self, frame, event, meta):
-        """Slot to handle the frameReady signal from the worker."""
-        self._mmc.mda.events.frameReady.emit(frame, event, meta)
+        """Slot to receive frame from worker and emit on the engine's event bus."""
+        self.events.frameReady.emit(frame, event, meta)
 
     def _on_acquisition_finished(self, sequence):
-        """Slot to handle the acquisitionFinished signal from the worker."""
+        """Slot to clean up and emit the sequenceFinished event."""
         if self._thread:
             self._thread.quit()
             self._thread.wait()
         self._thread = None
         self._worker = None
-        self._mmc.mda.events.sequenceFinished.emit(sequence)
+        self.events.sequenceFinished.emit(sequence)
+        logger.info("Custom PLogic MDAEngine finished.")

@@ -126,7 +126,10 @@ def main():
     if mda_widget:
 
         def mda_runner(output=None):
-            """Wrapper that creates a writer and passes it to our custom engine."""
+            """
+            Creates a writer, connects it to the engine's events,
+            runs the sequence, and ensures disconnection.
+            """
             sequence: MDASequence = mda_widget.value()
             writer = None
 
@@ -135,38 +138,35 @@ def main():
                 save_format = getattr(mda_widget, "save_format", "ome-tiff")
                 overwrite = getattr(mda_widget, "overwrite", False)
 
-                logger.info(f"Saving is enabled. Format: {save_format}, Path: {save_path}")
+                logger.info(f"Saving enabled. Format: {save_format}, Path: {save_path}")
                 if save_format == "ome-zarr":
                     writer = OMEZarrWriter(save_path, overwrite=overwrite)
-                    logger.info("OME-Zarr writer created.")
                 elif save_format == "ome-tiff":
                     writer = ImageSequenceWriter(save_path, overwrite=overwrite)
-                    logger.info("OME-TIFF writer created.")
                 else:
-                    logger.warning(f"Unknown save format '{save_format}'. No writer will be created.")
+                    logger.warning(f"Unknown save format '{save_format}'. No writer created.")
 
-            if writer is not None:
+            if writer:
+                # Connect the writer's methods to the engine's public signals
+                engine.events.sequenceStarted.connect(writer.sequenceStarted)
+                engine.events.frameReady.connect(writer.frameReady)
+                engine.events.sequenceFinished.connect(writer.sequenceFinished)
+                logger.info("Writer connected to MDA engine events.")
 
-                class WriterAdapter:
-                    def __init__(self, writer):
-                        self._writer = writer
-
-                    def sequenceStarted(self, sequence):
-                        self._writer.sequenceStarted(sequence)
-
-                    def frameReady(self, frame, event, metadata):
-                        self._writer.frameReady(frame, event, metadata)
-
-                    def sequenceFinished(self, sequence):
-                        self._writer.sequenceFinished(sequence)
-
-                writer_adapter = WriterAdapter(writer)
-                engine.run(sequence, writer_adapter)
+                try:
+                    engine.run(sequence)
+                finally:
+                    # IMPORTANT: Always disconnect events after the run
+                    engine.events.sequenceStarted.disconnect(writer.sequenceStarted)
+                    engine.events.frameReady.disconnect(writer.frameReady)
+                    engine.events.sequenceFinished.disconnect(writer.sequenceFinished)
+                    logger.info("Writer disconnected from MDA engine events.")
             else:
-                engine.run(sequence, None)
+                logger.info("No writer specified. Running MDA without saving.")
+                engine.run(sequence)
 
         mda_widget.execute_mda = mda_runner
-        logger.info("MDA 'Run' button has been wired to support saving with CustomPLogicMDAEngine.")
+        logger.info("MDA 'Run' button wired for saving with CustomPLogicMDAEngine.")
     else:
         logger.warning("Could not find MDA widget to intercept.")
 
