@@ -128,21 +128,21 @@ def main():
         def mda_runner(output=None):
             """Wrapper that creates a writer and passes it to our custom engine."""
             sequence: MDASequence = mda_widget.value()
-            writer: Optional[SupportsMDAEvents] = None # Explicitly type the writer variable
+            writer: Optional[SupportsMDAEvents] = None  # Explicitly type the writer variable
 
             if output:
                 save_path = output
                 # Get format and overwrite settings using the widget's public API
                 # Safer default handling using hasattr and explicit checks
-                save_format = "ome-tiff" # Default changed to ome-tiff
+                save_format = "ome-tiff"  # Default changed to ome-tiff
                 if hasattr(mda_widget, "save_format"):
                     save_format_callable = getattr(mda_widget, "save_format")
                     if callable(save_format_callable):
-                         tmp_format = save_format_callable()
-                         if isinstance(tmp_format, str): # Extra safety check
+                        tmp_format = save_format_callable()
+                        if isinstance(tmp_format, str):  # Extra safety check
                             save_format = tmp_format
 
-                overwrite = False # Default
+                overwrite = False  # Default
                 if hasattr(mda_widget, "overwrite"):
                     overwrite_callable = getattr(mda_widget, "overwrite")
                     if callable(overwrite_callable):
@@ -165,19 +165,14 @@ def main():
                     writer = cast(SupportsMDAEvents, writer_instance)
                     logger.info("OME-TIFF writer created.")
                 elif save_format == "tiff-sequence":
-                     # Use ImageSequenceWriter for plain TIFF sequences if needed
-                     writer_instance = ImageSequenceWriter(save_path, overwrite=overwrite)
-                     # Cast the instance to the protocol type for type checker
-                     writer = cast(SupportsMDAEvents, writer_instance)
-                     logger.info("TIFF-Sequence writer created.")
+                    # Use ImageSequenceWriter for plain TIFF sequences if needed
+                    writer_instance = ImageSequenceWriter(save_path, overwrite=overwrite)
+                    # Cast the instance to the protocol type for type checker
+                    writer = cast(SupportsMDAEvents, writer_instance)
+                    logger.info("TIFF-Sequence writer created.")
                 else:
                     logger.warning(f"Unknown save format '{save_format}'. No writer will be created.")
-
-            # Pass the writer (or None) directly to the engine.
-            # The engine's worker will connect its signals to the writer's methods.
-            # No WriterAdapter needed.
-            # Cast the writer again before passing to ensure type compatibility at call site
-            engine.run(sequence, cast(Optional[SupportsMDAEvents], writer))
+            engine.run(sequence, writer)
 
         mda_widget.execute_mda = mda_runner
         logger.info("MDA 'Run' button has been wired to support saving with CustomPLogicMDAEngine.")

@@ -38,9 +38,10 @@ logger.propagate = False
 
 
 # Define a protocol for the writer to satisfy the type checker
+# This now includes sequenceStarted, which is crucial for initializing writers.
 class SupportsMDAEvents(Protocol):
+    def sequenceStarted(self, sequence: MDASequence): ...
     def frameReady(self, frame, event, metadata): ...
-
     def sequenceFinished(self, sequence): ...
 
 
@@ -234,8 +235,21 @@ class CustomPLogicMDAEngine(MDAEngine):
         """Run an MDA sequence, delegating to the correct method."""
         if self._should_use_plogic(sequence):
             logger.info("Running custom PLogic Z-stack sequence")
+
+            # **FIX:** Manually initialize the writer before starting the acquisition.
+            # This call is necessary for writers like OMETiffWriter to open the
+            # file and prepare for receiving frames.
+            if writer:
+                try:
+                    writer.sequenceStarted(sequence)
+                    logger.info(f"Writer {type(writer).__name__} initialized.")
+                except Exception as e:
+                    logger.error(f"Failed to initialize writer: {e}", exc_info=True)
+                    # Invalidate writer to prevent further errors
+                    writer = None
+
             self._mmc.mda.events.sequenceStarted.emit(sequence, {})
-            # Pass the writer to the worker
+            # Pass the (possibly now None) writer to the worker
             self._worker = AcquisitionWorker(self._mmc, sequence, writer)
             self._thread = QThread()
             self._worker.moveToThread(self._thread)
