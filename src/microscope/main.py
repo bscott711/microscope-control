@@ -3,11 +3,17 @@
 import logging
 import sys
 from functools import wraps
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Callable, Optional, Union
 
 from pymmcore_gui import WidgetAction, create_mmgui
 from pymmcore_gui.actions import core_actions
 from pymmcore_plus import CMMCorePlus
+from pymmcore_plus.mda.handlers import (
+    ImageSequenceWriter,
+    OMETiffWriter,
+    OMEZarrWriter,
+)
 from qtpy.QtWidgets import QApplication
 from useq import MDASequence
 
@@ -18,7 +24,7 @@ from microscope.core.hardware import (
     disable_live_laser,
     enable_live_laser,
     open_global_shutter,
-    set_camera_trigger_mode_level_high,  # Import the new function
+    set_camera_trigger_mode_level_high,
 )
 
 # Set up logger
@@ -65,7 +71,7 @@ def main():
 
         @wraps(original_snap_func)
         def snap_with_laser(*args, **kwargs):
-            """Wrapper that enables the beam, turns the laser on, snaps, and schedules cleanup."""
+            """Wrapper that enables beam, turns laser on, snaps, and schedules cleanup."""
             logger.info("Snap action triggered: entering laser/beam control wrapper.")
 
             logger.debug("Enabling SPIM beam for snap...")
@@ -155,10 +161,55 @@ def main():
 
     mda_widget = window.get_widget(WidgetAction.MDA_WIDGET)
     if mda_widget:
+        # This object manages the connection of a data-saving handler to the MDA
+        # event bus. It connects the handler when created and disconnects when the
+        # sequence is finished.
+        class HandlerManager:
+            def __init__(
+                self,
+                mmc: CMMCorePlus,
+                handler: Optional[Union[OMEZarrWriter, OMETiffWriter, ImageSequenceWriter]],
+            ):
+                self.mmc = mmc
+                self.handler = handler
+                if self.handler:
+                    self.mmc.mda.events.sequenceStarted.connect(self.handler.sequenceStarted)
+                    self.mmc.mda.events.frameReady.connect(self.handler.frameReady)
+                    self.mmc.mda.events.sequenceFinished.connect(self.handler.sequenceFinished)
+                self.mmc.mda.events.sequenceFinished.connect(self._disconnect)
+
+            def _disconnect(self, sequence: MDASequence):
+                if self.handler:
+                    self.mmc.mda.events.sequenceStarted.disconnect(self.handler.sequenceStarted)
+                    self.mmc.mda.events.frameReady.disconnect(self.handler.frameReady)
+                    self.mmc.mda.events.sequenceFinished.disconnect(self.handler.sequenceFinished)
+                self.mmc.mda.events.sequenceFinished.disconnect(self._disconnect)
+
+        # We need to keep a reference to the manager to prevent it from being garbage
+        # collected before the acquisition is finished. It will be overwritten on the
+        # next run.
+        _handler_manager = None
 
         def mda_runner(output=None):
-            """Wrapper to call our engine from the GUI."""
+            """Wrapper that gets sequence and save_path from GUI and runs MDA."""
+            nonlocal _handler_manager
             sequence: MDASequence = mda_widget.value()
+            save_info = mda_widget.save_info.value()
+
+            handler = None
+            if save_info["should_save"]:
+                # Determine which handler to use based on the file format
+                save_path = Path(save_info["save_dir"]) / save_info["save_name"]
+                if save_path.suffix in {".zarr", ".ome.zarr"}:
+                    handler = OMEZarrWriter(save_path, overwrite=True)
+                elif save_path.suffix in {".tif", ".tiff", ".ome.tif", ".ome.tiff"}:
+                    handler = OMETiffWriter(save_path)
+                else:
+                    # Default to a folder of images
+                    handler = ImageSequenceWriter(save_path)
+
+            # The manager will connect the handler and disconnect itself when done.
+            _handler_manager = HandlerManager(mmc, handler)
             engine.run(sequence)
 
         mda_widget.execute_mda = mda_runner
