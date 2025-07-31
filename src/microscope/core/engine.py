@@ -1,10 +1,14 @@
 import logging
 import time
+from typing import Optional
 
+# Import the specific GUI class for type casting
+from pymmcore_gui import MicroManagerGUI
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
 from pymmcore_plus.metadata import frame_metadata
 from qtpy.QtCore import QObject, QThread, Signal  # type: ignore
+from qtpy.QtWidgets import QApplication
 from useq import (
     MDASequence,
     MultiPhaseTimePlan,
@@ -41,19 +45,19 @@ class AcquisitionWorker(QObject):
     Worker object for running hardware-timed acquisitions in a separate thread.
 
     Signals:
-        frameReady (object, object, object): Emitted when a new frame is ready.
-                                              Provides (image, event, metadata).
+        frameReady (object, object, object): Emitted for every frame. The engine
+                                              will decide whether to display it.
         acquisitionFinished (object): Emitted when the acquisition is finished.
-                                      Provides the sequence object.
     """
 
     frameReady = Signal(object, object, object)
     acquisitionFinished = Signal(object)
 
-    def __init__(self, mmc: CMMCorePlus, sequence: MDASequence, parent=None):
+    def __init__(self, mmc: CMMCorePlus, sequence: MDASequence, handler=None, parent=None):
         super().__init__(parent)
         self._mmc = mmc
         self.sequence = sequence
+        self.handler = handler
         self.HW = HardwareConstants()
         self._running = True
 
@@ -73,13 +77,10 @@ class AcquisitionWorker(QObject):
         num_z_slices = len(list(self.sequence.z_plan))
         num_timepoints = self.sequence.shape[0]
         interval_s = self._get_time_interval_s(self.sequence.time_plan)
-        # The controller delay is from the end of one scan to the start of the next.
-        # We must subtract the time it takes to acquire one z-stack.
         scan_duration_s = (num_z_slices * self._mmc.getExposure()) / 1000.0
         repeat_delay_s = interval_s - scan_duration_s
         repeat_delay_ms = max(0, repeat_delay_s * 1000.0)
 
-        # Add a warning if no interval is set for a multi-timepoint acquisition
         if num_timepoints > 1 and interval_s <= 0:
             logger.warning(
                 "Acquisition has multiple timepoints but no interval is set. "
@@ -116,8 +117,8 @@ class AcquisitionWorker(QObject):
             )
             configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
 
-            # Calculate the required galvo amplitude from the z-plan range
             z_positions = list(self.sequence.z_plan)
+            galvo_amplitude_deg = 0
             if len(z_positions) > 1:
                 z_range = max(z_positions) - min(z_positions)
                 galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
@@ -127,7 +128,6 @@ class AcquisitionWorker(QObject):
                     z_range,
                 )
             else:
-                galvo_amplitude_deg = 0
                 logger.info("Z-plan has fewer than 2 points. Setting galvo amplitude to 0.")
 
             configure_galvo_for_spim_scan(
@@ -141,13 +141,9 @@ class AcquisitionWorker(QObject):
             logger.info("Hardware configured for full time-series.")
             # ---------------------------------------------------------
 
-            # ---- SINGLE TRIGGER AND COLLECTION LOOP ----
             self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images_expected, 0, True)
             trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
 
-            # The MDASequence is immutable, so we create a new sequence object
-            # with the axis_order forced to match the hardware's physical
-            # acquisition order (T -> P -> Z -> C).
             sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
             events = iter(sequence)
 
@@ -156,22 +152,39 @@ class AcquisitionWorker(QObject):
                     break
                 while self._mmc.getRemainingImageCount() == 0:
                     if not self._mmc.isSequenceRunning():
+                        logger.error(
+                            "Camera sequence stopped before all frames were collected. "
+                            "Expected: %d, Collected: %d",
+                            total_images_expected,
+                            i,
+                        )
                         raise RuntimeError("Camera sequence stopped unexpectedly.")
-                    time.sleep(0.001)
+                    time.sleep(0.01)
 
                 tagged_img = self._mmc.popNextTaggedImage()
                 event = next(events)
                 meta = frame_metadata(self._mmc, mda_event=event)
+
+                # Save every frame directly in this thread
+                if self.handler:
+                    try:
+                        self.handler.frameReady(tagged_img.pix, event, meta)
+                        logger.debug(f"Frame saved: {event.index}")
+                    except Exception as e:
+                        logger.error(f"Error in data handler for event {event.index}: {e}")
+
+                # Emit every frame for the viewer buffer and potential display update
                 self.frameReady.emit(tagged_img.pix, event, meta)
-                logger.debug(f"Frame collected: {event.index}")
 
             logger.info("Hardware-driven time-series complete.")
 
-        except Exception as _e:
-            logger.error("Error during acquisition", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error during acquisition: {e}", exc_info=True)
         finally:
             logger.info("Acquisition sequence finished. Cleaning up.")
-            # Set camera back to internal trigger mode
+            if self.handler:
+                self.handler.sequenceFinished(self.sequence)
+
             set_property(self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger")
             logger.info(f"Camera {self.HW.camera_a_label} reverted to Internal Trigger.")
             set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
@@ -209,17 +222,38 @@ class CustomPLogicMDAEngine(MDAEngine):
         self.HW = HardwareConstants()
         self._worker = None
         self._thread = None
+        self.z_slice_for_viewer: Optional[int] = None
+        self._viewer_connections_made = False
+        self._viewer = None
+        self._viewer_handler = None
 
-    def run(self, sequence: MDASequence):
+    def set_z_slice_for_viewer(self, index_map: dict):
+        """Slot to receive the z-slice index from the viewer's slider."""
+        if "z" in index_map:
+            new_index = index_map["z"]
+            if self.z_slice_for_viewer != new_index:
+                self.z_slice_for_viewer = new_index
+                logger.debug(f"Viewer Z-slice selection updated to: {new_index}")
+
+    def run(self, sequence: MDASequence, handler=None):
         """Run an MDA sequence, delegating to the correct method."""
         if self._should_use_plogic(sequence):
             logger.info("Running custom PLogic Z-stack sequence")
+
+            # Set initial z-slice for viewer to the middle slice
+            num_z_slices = len(list(sequence.z_plan)) if sequence.z_plan else 0
+            self.z_slice_for_viewer = num_z_slices // 2 if num_z_slices > 0 else 0
+            logger.info(f"Initial viewer Z-slice set to: {self.z_slice_for_viewer}")
+
+            if not self._viewer_connections_made:
+                self._connect_to_viewer()
+
             self._mmc.mda.events.sequenceStarted.emit(sequence, {})
-            self._worker = AcquisitionWorker(self._mmc, sequence)
+
+            self._worker = AcquisitionWorker(self._mmc, sequence, handler=handler)
             self._thread = QThread()
             self._worker.moveToThread(self._thread)
 
-            # Connect signals
             self._worker.frameReady.connect(self._on_frame_ready)
             self._thread.started.connect(self._worker.run)
             self._worker.acquisitionFinished.connect(self._on_acquisition_finished)
@@ -228,6 +262,36 @@ class CustomPLogicMDAEngine(MDAEngine):
         else:
             logger.info("Falling back to default MDA engine")
             self._mmc.run_mda(sequence)
+
+    def _connect_to_viewer(self):
+        """Find the main window and connect to the viewer's signals."""
+        app = QApplication.instance()
+        if not isinstance(app, QApplication):
+            logger.warning("No QApplication instance found, cannot connect viewer.")
+            return
+
+        main_win: Optional[MicroManagerGUI] = None
+        for widget in app.topLevelWidgets():
+            if isinstance(widget, MicroManagerGUI):
+                main_win = widget
+                break
+
+        if not main_win:
+            logger.warning("Could not find MicroManagerGUI window to connect viewer.")
+            return
+
+        viewer_manager = main_win._viewers_manager
+
+        def on_viewer_created(viewer, sequence):
+            logger.info(f"MDA Viewer created. Connecting Z-slider for sequence {str(sequence.uid)[:8]}.")
+            self._viewer = viewer
+            self._viewer_handler = viewer_manager._handler or viewer_manager._own_handler
+            viewer.display_model.current_index.events.value.connect(self.set_z_slice_for_viewer)
+            self.set_z_slice_for_viewer(viewer.display_model.current_index)
+
+        viewer_manager.mdaViewerCreated.connect(on_viewer_created)
+        self._viewer_connections_made = True
+        logger.info("Engine is now listening for new MDA viewers.")
 
     def _should_use_plogic(self, sequence: MDASequence) -> bool:
         """Check if the Core Focus device is the designated Piezo stage."""
@@ -245,7 +309,16 @@ class CustomPLogicMDAEngine(MDAEngine):
 
     def _on_frame_ready(self, frame, event, meta):
         """Slot to handle the frameReady signal from the worker."""
-        self._mmc.mda.events.frameReady.emit(frame, event, meta)
+        # This method now handles both populating the viewer's data buffer
+        # and selectively updating the viewer's display.
+
+        # 1. Populate viewer buffer by calling its handler directly
+        if self._viewer_handler:
+            self._viewer_handler.frameReady(frame, event, meta)
+
+        # 2. Conditionally update the viewer's display
+        if self._viewer and event.index.get("z") == self.z_slice_for_viewer:
+            self._viewer.display_model.current_index.update(event.index)
 
     def _on_acquisition_finished(self, sequence):
         """Slot to handle the acquisitionFinished signal from the worker."""
@@ -254,5 +327,6 @@ class CustomPLogicMDAEngine(MDAEngine):
             self._thread.wait()
         self._thread = None
         self._worker = None
-        self._mmc.mda.events.sequenceFinished.emit(sequence)
+        self._viewer = None
+        self._viewer_handler = None
         self._mmc.mda.events.sequenceFinished.emit(sequence)
