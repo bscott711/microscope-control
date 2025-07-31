@@ -3,7 +3,7 @@ axis_order:
 - z
 - c
 channels:
-- config: 488nm
+- config: AllLasers
   exposure: 10.0
   group: Lasers
 metadata:
@@ -13,5 +13,5 @@ time_plan:
   interval: 5.0
   loops: 5
 z_plan:
-  range: 3.0
-  step: 1.0
+  range: 30.0
+  step: 10.0

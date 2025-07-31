@@ -210,6 +210,7 @@ class CustomPLogicMDAEngine(MDAEngine):
         self._worker = None
         self._thread = None
         self._frame_buffer = {}
+        # _display_t and _display_z now track the user's desired slice for scrubbing
         self._display_t = 0
         self._display_z = 0
         self._sequence = None
@@ -244,8 +245,10 @@ class CustomPLogicMDAEngine(MDAEngine):
             current_focus_device = self._mmc.getProperty("Core", "Focus")
             result = current_focus_device == "PiezoStage:P:34"
             logger.debug(
-                f"Checking Core Focus. Current: '{current_focus_device}'. "
-                f"Required: 'PiezoStage:P:34'. Should use PLogic? {result}"
+                "Checking Core Focus. Current: '%s'. Required: '%s'. Use PLogic? %s",
+                current_focus_device,
+                "PiezoStage:P:34",
+                result,
             )
             return result
         except Exception as e:
@@ -253,29 +256,57 @@ class CustomPLogicMDAEngine(MDAEngine):
             return False
 
     def _on_frame_ready(self, frame, event, meta):
-        """Slot to handle the frameReady signal from the worker."""
+        """
+        Slot to handle the frameReady signal from the worker.
+
+        This method buffers the frame for later scrubbing and immediately emits the
+        global frameReady event. This ensures that all data is saved and the
+        live view is continuously updated.
+        """
         if not self._sequence:
             return
 
-        key = tuple(event.index.get(k, 0) for k in self._sequence.axis_order)
+        # Buffer the frame using a key derived from its full index.
+        # The worker forces the axis order to ('t', 'p', 'z', 'c').
+        key = (
+            event.index.get("t", 0),
+            event.index.get("p", 0),
+            event.index.get("z", 0),
+            event.index.get("c", 0),
+        )
         self._frame_buffer[key] = (frame, event, meta)
 
-        if event.index.get("t", 0) == self._display_t and event.index.get("z", 0) == self._display_z:
-            self._mmc.mda.events.frameReady.emit(frame, event, meta)
+        # Immediately emit the signal for all frames. This is crucial for
+        # saving data and for the default live view.
+        self._mmc.mda.events.frameReady.emit(frame, event, meta)
 
     def set_displayed_slice(self, t: int, z: int):
         """
-        Set the t and z slice to be displayed.
+        Request a specific t- and z-slice to be displayed.
 
-        If the frame is already in the buffer, it will be emitted for display.
+        If the requested frame is found in the buffer, it is emitted via the
+        frameReady signal to update the display. This allows for scrubbing
+        during or after the acquisition. This implementation assumes you want to
+        view the first channel and first position for the given t/z.
         """
+        if not self._sequence:
+            return
+
         self._display_t = t
         self._display_z = z
 
-        for key, (frame, event, meta) in self._frame_buffer.items():
-            if event.index.get("t") == t and event.index.get("z") == z:
-                self._mmc.mda.events.frameReady.emit(frame, event, meta)
-                return
+        # Construct the key for the requested frame, assuming channel 0, position 0.
+        # The worker forces the axis order to ('t', 'p', 'z', 'c').
+        lookup_key = (t, 0, z, 0)
+
+        if lookup_key in self._frame_buffer:
+            frame, event, meta = self._frame_buffer[lookup_key]
+            # Emit the specific buffered frame to update the viewer.
+            self._mmc.mda.events.frameReady.emit(frame, event, meta)
+            logger.debug("Re-displaying buffered frame for t=%d, z=%d", t, z)
+        else:
+            # This is not an error; the frame may not have been acquired yet.
+            logger.debug("Frame for t=%d, z=%d not yet in buffer.", t, z)
 
     def _on_acquisition_finished(self, sequence):
         """Slot to handle the acquisitionFinished signal from the worker."""
@@ -284,5 +315,4 @@ class CustomPLogicMDAEngine(MDAEngine):
             self._thread.wait()
         self._thread = None
         self._worker = None
-        self._mmc.mda.events.sequenceFinished.emit(sequence)
         self._mmc.mda.events.sequenceFinished.emit(sequence)
