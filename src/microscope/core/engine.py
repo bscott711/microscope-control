@@ -209,9 +209,18 @@ class CustomPLogicMDAEngine(MDAEngine):
         self.HW = HardwareConstants()
         self._worker = None
         self._thread = None
+        self._frame_buffer = {}
+        self._display_t = 0
+        self._display_z = 0
+        self._sequence = None
 
     def run(self, sequence: MDASequence):
         """Run an MDA sequence, delegating to the correct method."""
+        self._sequence = sequence
+        self._frame_buffer.clear()
+        self._display_t = 0
+        self._display_z = 0
+
         if self._should_use_plogic(sequence):
             logger.info("Running custom PLogic Z-stack sequence")
             self._mmc.mda.events.sequenceStarted.emit(sequence, {})
@@ -245,7 +254,28 @@ class CustomPLogicMDAEngine(MDAEngine):
 
     def _on_frame_ready(self, frame, event, meta):
         """Slot to handle the frameReady signal from the worker."""
-        self._mmc.mda.events.frameReady.emit(frame, event, meta)
+        if not self._sequence:
+            return
+
+        key = tuple(event.index.get(k, 0) for k in self._sequence.axis_order)
+        self._frame_buffer[key] = (frame, event, meta)
+
+        if event.index.get("t", 0) == self._display_t and event.index.get("z", 0) == self._display_z:
+            self._mmc.mda.events.frameReady.emit(frame, event, meta)
+
+    def set_displayed_slice(self, t: int, z: int):
+        """
+        Set the t and z slice to be displayed.
+
+        If the frame is already in the buffer, it will be emitted for display.
+        """
+        self._display_t = t
+        self._display_z = z
+
+        for key, (frame, event, meta) in self._frame_buffer.items():
+            if event.index.get("t") == t and event.index.get("z") == z:
+                self._mmc.mda.events.frameReady.emit(frame, event, meta)
+                return
 
     def _on_acquisition_finished(self, sequence):
         """Slot to handle the acquisitionFinished signal from the worker."""
