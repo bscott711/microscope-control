@@ -1,10 +1,11 @@
 # src/microscope/main.py
 
+import json
 import logging
 import sys
 from functools import wraps
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from pymmcore_gui import WidgetAction, create_mmgui
 from pymmcore_gui.actions import core_actions
@@ -14,6 +15,7 @@ from pymmcore_plus.mda.handlers import (
     OMETiffWriter,
     OMEZarrWriter,
 )
+from pymmcore_plus.metadata import SummaryMetaV1, to_builtins
 from qtpy.QtWidgets import QApplication
 from useq import MDASequence
 
@@ -39,6 +41,38 @@ formatter = logging.Formatter(
 handler.setFormatter(formatter)
 if not logger.handlers:
     logger.addHandler(handler)
+
+
+class OMETiffWriterWithMetadata(OMETiffWriter):
+    """
+    Extends OMETiffWriter to save metadata JSON files alongside the OME-TIFF.
+    """
+
+    def __init__(self, filename: str):
+        # OMETiffWriter does not accept overwrite, it always overwrites.
+        super().__init__(filename)
+        self._basename = Path(filename).with_suffix("").name
+
+    def sequenceStarted(self, seq: MDASequence, meta: SummaryMetaV1 | object = object()):
+        super().sequenceStarted(seq, meta)
+        # Create directory for metadata if it doesn't exist
+        self._meta_dir = Path(self._filename).parent
+        self._meta_dir.mkdir(parents=True, exist_ok=True)
+        # Save the main sequence metadata
+        seq_path = self._meta_dir / f"{self._basename}_useq_MDASequence.json"
+        seq_path.write_text(seq.model_dump_json(indent=2))
+
+    def sequenceFinished(self, seq: MDASequence):
+        super().sequenceFinished(seq)
+        # Save the frame metadata
+        if self.frame_metadatas:
+            # The frame_metadatas in the base class is a dict mapping position keys
+            # to lists of frame metadata dicts.
+            serializable_meta = {
+                pos_key: [to_builtins(m) for m in metas] for pos_key, metas in self.frame_metadatas.items()
+            }
+            meta_path = self._meta_dir / f"{self._basename}_frame_metadata.json"
+            meta_path.write_text(json.dumps(serializable_meta, indent=2))
 
 
 def main():
@@ -161,51 +195,60 @@ def main():
 
     mda_widget = window.get_widget(WidgetAction.MDA_WIDGET)
     if mda_widget:
-        # This list will hold active context managers to prevent them from being
-        # garbage collected before the acquisition is finished.
-        _active_contexts = []
+        # This object manages the connection of a data-saving handler to the MDA
+        # event bus. It connects the handler when created and disconnects when the
+        # sequence is finished.
+        class HandlerManager:
+            def __init__(
+                self,
+                mmc: CMMCorePlus,
+                handler: Optional[
+                    Union[
+                        OMEZarrWriter,
+                        OMETiffWriterWithMetadata,
+                        ImageSequenceWriter,
+                    ]
+                ],
+            ):
+                self.mmc = mmc
+                self.handler = handler
+                if self.handler:
+                    self.mmc.mda.events.sequenceStarted.connect(self.handler.sequenceStarted)
+                    self.mmc.mda.events.frameReady.connect(self.handler.frameReady)
+                    self.mmc.mda.events.sequenceFinished.connect(self.handler.sequenceFinished)
+                self.mmc.mda.events.sequenceFinished.connect(self._disconnect)
+
+            def _disconnect(self, sequence: MDASequence):
+                if self.handler:
+                    self.mmc.mda.events.sequenceStarted.disconnect(self.handler.sequenceStarted)
+                    self.mmc.mda.events.frameReady.disconnect(self.handler.frameReady)
+                    self.mmc.mda.events.sequenceFinished.disconnect(self.handler.sequenceFinished)
+                self.mmc.mda.events.sequenceFinished.disconnect(self._disconnect)
+
+        # We need to keep a reference to the manager to prevent it from being garbage
+        # collected before the acquisition is finished. It will be overwritten on the
+        # next run.
+        _handler_manager = None
 
         def mda_runner(output=None):
             """Wrapper that gets sequence from GUI, creates a handler, and runs MDA."""
-            from pymmcore_plus.mda import mda_listeners_connected
-
+            nonlocal _handler_manager
             sequence: MDASequence = mda_widget.value()
             save_info = mda_widget.save_info.value()
 
             handler = None
             if save_info["should_save"]:
                 save_path = Path(save_info["save_dir"]) / save_info["save_name"]
-                # NOTE: OMETiffWriter does not accept an overwrite argument.
-                # OMEZarrWriter and ImageSequenceWriter do, but we let them default
-                # to overwrite=False for safety. The user should manage the folder.
                 if save_path.suffix in {".zarr", ".ome.zarr"}:
-                    handler = OMEZarrWriter(save_path)
+                    handler = OMEZarrWriter(save_path, overwrite=True)
                 elif save_path.suffix in {".tif", ".tiff", ".ome.tif", ".ome.tiff"}:
-                    handler = OMETiffWriter(save_path)
+                    handler = OMETiffWriterWithMetadata(str(save_path))
                 else:
                     handler = ImageSequenceWriter(save_path)
 
-            if handler:
-                # Create and enter the context manager, which starts the handler thread
-                # and connects the signals.
-                ctx = mda_listeners_connected(handler, mda_events=mmc.mda.events)
-                _active_contexts.append(ctx)
-                ctx.__enter__()
-
-                # Define a one-shot function to exit the context and clean up
-                # when the sequence is finished.
-                def on_finish(sequence: MDASequence):
-                    ctx.__exit__(None, None, None)
-                    _active_contexts.remove(ctx)
-                    mmc.mda.events.sequenceFinished.disconnect(on_finish)
-
-                mmc.mda.events.sequenceFinished.connect(on_finish)
-
-            # engine.run is non-blocking and will start the acquisition in a thread
+            _handler_manager = HandlerManager(mmc, handler)
             engine.run(sequence)
 
-        # The pymmcore-gui MDAWidget is designed to be customized by replacing
-        # the `execute_mda` method.
         mda_widget.execute_mda = mda_runner
         logger.info("MDA 'Run' button has been wired to use CustomPLogicMDAEngine.")
     else:
