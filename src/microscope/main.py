@@ -26,7 +26,7 @@ from microscope.controller.hardware_controller import (
     open_global_shutter,
     set_camera_trigger_mode_level_high,
 )
-from microscope.core.engine import CustomPLogicMDAEngine
+from microscope.controller.mda_controller import CustomPLogicMDAEngine
 from microscope.model.hardware_model import HardwareConstants
 
 # Set up logger

@@ -15,7 +15,7 @@ from useq import (
 
 from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
 
-from ..controller.hardware_controller import (
+from .hardware_controller import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
     set_camera_for_hardware_trigger,
