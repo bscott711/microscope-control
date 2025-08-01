@@ -8,7 +8,8 @@ import logging
 
 from pymmcore_plus import CMMCorePlus
 
-from .. import AcquisitionSettings, HardwareConstants
+from ..constants import HardwareConstants
+from ..settings import AcquisitionSettings
 from .utils import get_property, send_tiger_command, set_property
 
 logger = logging.getLogger(__name__)

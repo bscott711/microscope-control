@@ -8,7 +8,7 @@ import logging
 
 from pymmcore_plus import CMMCorePlus
 
-from .. import HardwareConstants
+from ..constants import HardwareConstants
 from .utils import set_property
 
 logger = logging.getLogger(__name__)

@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Optional, Union
 
+from pymmcore_gui import WidgetAction
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda.handlers import ImageSequenceWriter, OMEZarrWriter
 from useq import MDASequence
@@ -20,16 +21,18 @@ class MDAController:
         self.window = main_controller.window
         self._handler_manager = None
 
-    def run_mda(self, sequence: Optional[MDASequence] = None):
+    def run_mda(self, output=None):
         """
         Prepares and executes an MDA sequence with the appropriate data handler.
+
+        This method's signature matches what pymmcore-gui's MDAWidget expects.
         """
-        mda_widget = self.window.mda_widget
+        # Use the public get_widget() method to access the MDA widget
+        mda_widget = self.window.get_widget(WidgetAction.MDA_WIDGET)
         if not mda_widget:
             return
 
-        if sequence is None:
-            sequence = mda_widget.value()
+        sequence: MDASequence = mda_widget.value()
 
         save_info = mda_widget.save_info.value()
         handler = None
@@ -42,10 +45,8 @@ class MDAController:
             else:
                 handler = ImageSequenceWriter(save_path)
 
-        # The handler manager will be garbage collected after the sequence,
-        # disconnecting the handler from the events.
         self._handler_manager = HandlerManager(self.mmc, handler)
-        self.mmc.mda.engine.run(sequence)
+        self.mmc.mda.run(sequence)
 
 
 class HandlerManager:

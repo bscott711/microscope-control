@@ -1,6 +1,7 @@
 # src/microscope/controller/actions.py
 
 import logging
+import time
 from typing import Callable, Optional
 
 from pymmcore_gui.actions import core_actions
@@ -36,6 +37,9 @@ class ActionsController:
 
         self.mmc.setProperty(self.hw.galvo_a_label, "BeamEnabled", "Yes")
         enable_live_laser(self.mmc, self.hw)
+
+        # Add a small delay to allow hardware to settle before snapping.
+        time.sleep(0.1)
 
         self.mmc.events.imageSnapped.connect(self._snap_cleanup)
         self._original_snap_func(*args, **kwargs)

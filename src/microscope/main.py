@@ -1,9 +1,5 @@
-# src/microscope/main.py
-
 import logging
 import sys
-
-from qtpy.QtWidgets import QApplication
 
 from microscope.controller import ApplicationController
 
@@ -23,13 +19,8 @@ if not logger.handlers:
 
 def main():
     """Initializes and runs the microscope control application."""
-    app = QApplication.instance()
-    if not app:
-        app = QApplication(sys.argv)
-
-    controller = ApplicationController(app)
-    controller.show_window()
-    sys.exit(app.exec_())
+    # The ApplicationController now manages the QApplication lifecycle.
+    sys.exit(ApplicationController.run())
 
 
 if __name__ == "__main__":

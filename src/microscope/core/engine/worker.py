@@ -14,15 +14,15 @@ from useq import (
     ZRangeAround,
 )
 
-from .. import (
-    AcquisitionSettings,
-    HardwareConstants,
+from ..constants import HardwareConstants
+from ..hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
     set_camera_for_hardware_trigger,
     set_property,
     trigger_spim_scan_acquisition,
 )
+from ..settings import AcquisitionSettings
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class AcquisitionWorker(QObject):
             # --- Run Acquisition ---
             total_images = len(list(self.sequence))
             self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images, 0, True)
-            trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label) # type: ignore
+            trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)  # type: ignore
 
             # --- Collect Data ---
             events = iter(self.sequence)
