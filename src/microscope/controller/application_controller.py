@@ -9,6 +9,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Callable, Optional, Union
 
+import numpy as np
 from pymmcore_gui import WidgetAction
 from pymmcore_gui.actions import core_actions
 from pymmcore_plus import CMMCorePlus
@@ -61,6 +62,42 @@ class OMETiffWriterWithMetadata(OMETiffWriter):
             meta_path.write_text(json.dumps(serializable_meta, indent=2))
 
 
+class SnapFixer:
+    """
+    A helper class to fix the race condition when snapping an image.
+    """
+
+    def __init__(self, mmc: CMMCorePlus, preview: MainView):
+        self.mmc = mmc
+        self.preview = preview
+        self._snap_requested = False
+
+    def connect(self):
+        """Connects the necessary event handlers."""
+        self.mmc.events.imageSnapped.connect(self._on_snap)
+        self.mmc.mda.events.frameReady.connect(self._on_frame_ready)
+
+    def _on_snap(self):
+        """
+        Called when imageSnapped is emitted.
+        """
+        if not self.mmc.isSequenceRunning():
+            self._snap_requested = True
+
+    def _on_frame_ready(self, image: np.ndarray, event: MDASequence, metadata: dict):
+        """
+        Called when a frame is ready.
+        """
+        if self._snap_requested:
+            # The main preview window will be updated automatically by pymmcore-gui
+            self._snap_requested = False
+
+    def disconnect(self):
+        """Disconnects the event handlers."""
+        self.mmc.events.imageSnapped.disconnect(self._on_snap)
+        self.mmc.mda.events.frameReady.disconnect(self._on_frame_ready)
+
+
 class ApplicationController:
     """
     The main controller for the microscope application.
@@ -78,6 +115,8 @@ class ApplicationController:
         self._original_live_func: Optional[Callable] = None
 
         self._setup_logic()
+        self.snap_fixer = SnapFixer(self.mmc, self.view)
+        self.snap_fixer.connect()
 
     def run(self):
         """Starts the application."""
@@ -108,23 +147,26 @@ class ApplicationController:
 
             @wraps(self._original_snap_func)
             def snap_with_laser(*args, **kwargs):
-                # This assert reassures the type checker
                 assert self._original_snap_func is not None
-                logger.info("Snap action triggered: entering laser/beam control wrapper.")
+                logger.info("Snap action triggered: entering synchronous laser/beam control.")
+
+                # Turn hardware on
                 self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "Yes")
                 enable_live_laser(self.mmc, self.model)
-                self.mmc.events.imageSnapped.connect(self._snap_cleanup)
-                self._original_snap_func(*args, **kwargs)
+
+                try:
+                    # This is a blocking call. Code will not proceed until the
+                    # image is acquired and the 'imageSnapped' signal is emitted
+                    # and processed by all listeners (like the GUI preview).
+                    self._original_snap_func(*args, **kwargs)
+                finally:
+                    # This code is guaranteed to run AFTER the snap is complete.
+                    disable_live_laser(self.mmc, self.model)
+                    self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "No")
+                    logger.info("Laser and beam disabled. Snap cleanup complete.")
 
             core_actions.snap_action.on_triggered = snap_with_laser
-            logger.info("Snap action wired for verbose laser and beam control.")
-
-    def _snap_cleanup(self):
-        """A one-shot callback to turn off the laser and beam after snap."""
-        disable_live_laser(self.mmc, self.model)
-        self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "No")
-        self.mmc.events.imageSnapped.disconnect(self._snap_cleanup)
-        logger.info("Laser and beam disabled. Snap cleanup complete.")
+            logger.info("Snap action wired for synchronous laser and beam control.")
 
     def _wrap_toggle_live_action(self):
         """Injects laser/beam control into the pymmcore-gui toggle live action."""
@@ -133,7 +175,6 @@ class ApplicationController:
 
             @wraps(self._original_live_func)
             def toggle_live_with_laser(*args, **kwargs):
-                # This assert reassures the type checker
                 assert self._original_live_func is not None
                 if self.mmc.isSequenceRunning():
                     self._original_live_func(*args, **kwargs)
@@ -180,6 +221,7 @@ class ApplicationController:
     def _on_exit(self):
         """Clean up hardware state when the application quits."""
         logger.info("Application closing. Cleaning up hardware.")
+        self.snap_fixer.disconnect()
         self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "No")
         close_global_shutter(self.mmc, self.model)
         if self._original_snap_func:

@@ -8,7 +8,7 @@ import sys
 from typing import Any
 
 from pymmcore_gui import create_mmgui
-from pymmcore_gui._main_window import MicroManagerGUI  # Corrected import
+from pymmcore_gui._main_window import MicroManagerGUI
 from qtpy.QtWidgets import QApplication
 
 # Set up logger
@@ -18,45 +18,27 @@ logger = logging.getLogger(__name__)
 class MainView:
     """
     The main view for the microscope application.
-
     This class is responsible for creating, displaying, and providing access
     to the main GUI window and its widgets. It holds no application logic.
     """
 
     def __init__(self):
-        # Ensure a QApplication instance exists.
-        app = QApplication.instance()
-        if not app:
-            self._app = QApplication(sys.argv)
-        else:
-            self._app = app
-
+        # Let create_mmgui handle the creation of the MMQApplication instance.
         logger.info("Creating main GUI window.")
-        # Corrected type hint to MicroManagerGUI
         self.window: MicroManagerGUI = create_mmgui(exec_app=False)
+        self._app = QApplication.instance()  # Get the instance created by create_mmgui
 
     def get_widget(self, widget_key: str) -> Any:
-        """
-        Get a specific widget from the main window.
-
-        Args:
-            widget_key: The key corresponding to the desired widget
-                        (e.g., from pymmcore_gui.WidgetAction).
-
-        Returns:
-            The requested widget, or None if not found.
-        """
+        """Get a specific widget from the main window."""
         return self.window.get_widget(widget_key)
 
     def show(self):
         """Show the main window and start the application event loop."""
         logger.info("Showing main window.")
         self.window.show()
-        sys.exit(self._app.exec_())
+        if self._app:
+            sys.exit(self._app.exec_())
 
-    def app(self) -> QApplication:
+    def app(self) -> QApplication | None:
         """Return the QApplication instance."""
-        # This assert reassures the type checker that self._app is a QApplication
-        # based on the logic in __init__.
-        assert isinstance(self._app, QApplication)
-        return self._app
+        return self._app  # type: ignore
