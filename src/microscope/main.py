@@ -19,7 +19,6 @@ from pymmcore_plus.metadata import SummaryMetaV1, to_builtins
 from qtpy.QtWidgets import QApplication
 from useq import MDASequence
 
-from microscope.core.constants import HardwareConstants
 from microscope.core.engine import CustomPLogicMDAEngine
 from microscope.core.hardware import (
     close_global_shutter,
@@ -28,6 +27,7 @@ from microscope.core.hardware import (
     open_global_shutter,
     set_camera_trigger_mode_level_high,
 )
+from microscope.model.hardware.constants import HardwareConstants
 
 # Set up logger
 logger = logging.getLogger(__name__)

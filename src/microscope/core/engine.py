@@ -13,7 +13,7 @@ from useq import (
     ZRangeAround,
 )
 
-from .constants import HardwareConstants
+from ..model.hardware.constants import HardwareConstants
 from .hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,

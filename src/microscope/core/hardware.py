@@ -10,7 +10,7 @@ from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
 
-from .constants import HardwareConstants
+from ..model.hardware.constants import HardwareConstants
 from .settings import AcquisitionSettings
 
 # Create a single instance of the hardware constants to be used as a default
