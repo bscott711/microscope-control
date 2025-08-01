@@ -13,7 +13,8 @@ from useq import (
     ZRangeAround,
 )
 
-from ..model.hardware.constants import HardwareConstants
+from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
+
 from .hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
@@ -21,7 +22,6 @@ from .hardware import (
     set_property,
     trigger_spim_scan_acquisition,
 )
-from .settings import AcquisitionSettings
 
 # Set up logger
 logger = logging.getLogger(__name__)

@@ -10,8 +10,7 @@ from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
 
-from ..model.hardware.constants import HardwareConstants
-from .settings import AcquisitionSettings
+from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
 
 # Create a single instance of the hardware constants to be used as a default
 hw_constants = HardwareConstants()

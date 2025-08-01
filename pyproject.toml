@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # --- Core Project Metadata ---
 [project]
 name = "microscope-control"
-version = "0.2.0"
+version = "0.2.0.dev0"
 description = "OPM Control System"
 readme = "README.md"
 license = "MIT"

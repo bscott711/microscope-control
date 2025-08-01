@@ -27,7 +27,7 @@ from microscope.core.hardware import (
     open_global_shutter,
     set_camera_trigger_mode_level_high,
 )
-from microscope.model.hardware.constants import HardwareConstants
+from microscope.model.hardware_model import HardwareConstants
 
 # Set up logger
 logger = logging.getLogger(__name__)
