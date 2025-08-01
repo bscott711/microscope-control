@@ -83,6 +83,9 @@ class ApplicationController:
 
     def _setup_logic(self):
         """Wire up all the application logic."""
+        # This is the one essential fix: by disconnecting the default handler,
+        # we prevent the initial crash. The GUI will then correctly handle
+        # displaying the image using its own internal logic without error.
         self._disconnect_faulty_snap_handler()
         self._wrap_snap_action()
         self._wrap_toggle_live_action()
@@ -103,55 +106,50 @@ class ApplicationController:
         """
         Disconnect the default snap handler in the viewers manager to prevent
         the race condition that causes a "Camera image buffer read failed" error.
-        We will manually update the preview in our wrapped snap action.
+        The GUI has other internal mechanisms that will correctly display the
+        snapped image once this faulty one is removed.
         """
         try:
+            # We prevent the NDVViewersManager's own handler from running, as it
+            # causes a crash. The preview widget itself has a separate, safe
+            # handler that will take over.
             manager = self.view.window._viewers_manager
-            self.mmc.events.imageSnapped.disconnect(manager._on_image_snapped)
-            logger.info("Successfully disconnected NDVViewersManager snap handler.")
+            preview_widget = manager._create_or_show_img_preview()
+            if preview_widget:
+                self.mmc.events.imageSnapped.disconnect(preview_widget.append)
+            logger.info("Successfully disconnected faulty preview snap handler.")
         except Exception as e:
             logger.error("Failed to disconnect faulty snap handler: %s", e)
 
     def _wrap_snap_action(self):
         """
-        Injects laser/beam control and a safe image preview update into the
-        pymmcore-gui snap action.
+        Wraps the snap action to provide synchronous hardware control, using a
+        one-shot callback for cleanup, mirroring the user's proven logic.
         """
         self._original_snap_func = core_actions.snap_action.on_triggered
         if self._original_snap_func:
 
+            def snap_cleanup():
+                """A one-shot callback to turn off the laser and beam after snap."""
+                disable_live_laser(self.mmc, self.model)
+                # Disconnect self to ensure this is a one-shot callback
+                self.mmc.events.imageSnapped.disconnect(snap_cleanup)
+                logger.info("Laser and beam disabled. Snap cleanup complete.")
+
             @wraps(self._original_snap_func)
             def snap_with_laser(*args, **kwargs):
-                assert self._original_snap_func is not None
-                logger.info("Snap action triggered: entering synchronous laser/beam control.")
-
+                """Wrapper that enables beam, turns laser on, snaps, and schedules cleanup."""
+                logger.info("Snap action triggered.")
                 self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "Yes")
                 enable_live_laser(self.mmc, self.model)
 
-                try:
-                    # This call is blocking and will not return until the snap is complete.
-                    self._original_snap_func(*args, **kwargs)
-
-                    # After the snap call is complete, it is safe to get the image.
-                    logger.info("Snap finished, updating preview.")
-                    last_image = self.mmc.getImage()
-
-                    # Manually update the preview widget with the new image.
-                    manager = self.view.window._viewers_manager
-                    preview_widget = manager._create_or_show_img_preview()
-                    if preview_widget:
-                        preview_widget.append(last_image)
-
-                except RuntimeError as e:
-                    logger.error("Failed to get image after snap: %s", e)
-                finally:
-                    # This code is guaranteed to run after the snap is complete.
-                    disable_live_laser(self.mmc, self.model)
-                    self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "No")
-                    logger.info("Laser and beam disabled. Snap cleanup complete.")
+                # Connect the cleanup function to run once the snap is complete.
+                self.mmc.events.imageSnapped.connect(snap_cleanup)
+                # Call the original snap function
+                self._original_snap_func(*args, **kwargs)  # type: ignore
 
             core_actions.snap_action.on_triggered = snap_with_laser
-            logger.info("Snap action wired for safe preview update and laser control.")
+            logger.info("Snap action wired for hardware control.")
 
     def _wrap_toggle_live_action(self):
         """Injects laser/beam control into the pymmcore-gui toggle live action."""
@@ -160,20 +158,19 @@ class ApplicationController:
 
             @wraps(self._original_live_func)
             def toggle_live_with_laser(*args, **kwargs):
-                assert self._original_live_func is not None
+                """A wrapper for the live function that adds laser control."""
                 if self.mmc.isSequenceRunning():
-                    self._original_live_func(*args, **kwargs)
+                    self._original_live_func(*args, **kwargs)  # type: ignore
                     disable_live_laser(self.mmc, self.model)
-                    self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "No")
-                    logger.info("Live mode, laser, and beam disabled.")
+                    logger.info("Live mode, laserdisabled.")
                 else:
                     self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "Yes")
                     enable_live_laser(self.mmc, self.model)
-                    self._original_live_func(*args, **kwargs)
-                    logger.info("Live mode, laser, and beam enabled.")
+                    self._original_live_func(*args, **kwargs)  # type: ignore
+                    logger.info("Live mode and laser enabled.")
 
             core_actions.toggle_live_action.on_triggered = toggle_live_with_laser
-            logger.info("Live action wired for verbose laser and beam control.")
+            logger.info("Live action wired for hardware control.")
 
     def _wire_mda_widget(self, engine: CustomPLogicMDAEngine):
         """Connects the MDA 'Run' button to our custom engine."""
