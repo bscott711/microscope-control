@@ -20,7 +20,7 @@ from pymmcore_plus.mda.handlers import (
 from pymmcore_plus.metadata import SummaryMetaV1, to_builtins
 from useq import MDASequence
 
-from microscope.controller.mda_controller import CustomPLogicMDAEngine
+from microscope.acquisition import CustomPLogicMDAEngine
 from microscope.hardware import (
     close_global_shutter,
     disable_live_laser,
