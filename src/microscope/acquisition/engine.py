@@ -30,15 +30,18 @@ logger.propagate = False
 class CustomPLogicMDAEngine(MDAEngine):
     """Custom MDA engine for PLogic-driven SPIM Z-stacks."""
 
-    def __init__(self):
-        """Initialize the engine and fetch the CMMCorePlus instance."""
-        self._mmc = CMMCorePlus.instance()
-        super().__init__(self._mmc)
-        self.HW = HardwareConstants()
+    def __init__(self, mmc: CMMCorePlus, hw: HardwareConstants):
+        """Initialize the engine with the core instance and hardware constants.
+        Args:
+            mmc: The Micro-Manager core instance
+            hw: HardwareConstants object containing device labels and configuration
+        """
+        super().__init__(mmc)
+        self._mmc = mmc
+        self.HW = hw
         self._worker = None
         self._thread = None
         self._frame_buffer = {}
-        # _display_t and _display_z now track the user's desired slice for scrubbing
         self._display_t = 0
         self._display_z = 0
         self._sequence = None
