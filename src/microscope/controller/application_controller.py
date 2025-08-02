@@ -20,14 +20,14 @@ from pymmcore_plus.mda.handlers import (
 from pymmcore_plus.metadata import SummaryMetaV1, to_builtins
 from useq import MDASequence
 
-from microscope.controller.hardware_controller import (
+from microscope.controller.mda_controller import CustomPLogicMDAEngine
+from microscope.hardware import (
     close_global_shutter,
     disable_live_laser,
     enable_live_laser,
     open_global_shutter,
     set_camera_trigger_mode_level_high,
 )
-from microscope.controller.mda_controller import CustomPLogicMDAEngine
 from microscope.model.hardware_model import HardwareConstants
 
 # Set up logger

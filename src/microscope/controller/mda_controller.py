@@ -13,15 +13,14 @@ from useq import (
     ZRangeAround,
 )
 
-from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
-
-from .hardware_controller import (
+from microscope.hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
     set_camera_for_hardware_trigger,
     set_property,
     trigger_spim_scan_acquisition,
 )
+from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -143,7 +142,7 @@ class AcquisitionWorker(QObject):
 
             # ---- SINGLE TRIGGER AND COLLECTION LOOP ----
             self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images_expected, 0, True)
-            trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label)
+            trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label, self.HW)
 
             # The MDASequence is immutable, so we create a new sequence object
             # with the axis_order forced to match the hardware's physical
