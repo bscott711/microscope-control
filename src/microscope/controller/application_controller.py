@@ -12,7 +12,7 @@ from pymmcore_gui import WidgetAction
 from pymmcore_gui.actions import core_actions
 from pymmcore_plus import CMMCorePlus
 
-from microscope.application.mda_setup import setup_mda_widget
+from microscope.application import setup_mda_widget
 from microscope.model.hardware_model import HardwareConstants
 from microscope.view.main_view import MainView
 
