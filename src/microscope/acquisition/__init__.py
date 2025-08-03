@@ -1,5 +1,5 @@
 # src/microscope/acquisition/__init__.py
-from .engine import CustomPLogicMDAEngine
+from .engine import PLogicMDAEngine
 from .worker import AcquisitionWorker
 
-__all__ = ["CustomPLogicMDAEngine", "AcquisitionWorker"]
+__all__ = ["PLogicMDAEngine", "AcquisitionWorker"]

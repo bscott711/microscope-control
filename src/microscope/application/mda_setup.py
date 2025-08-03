@@ -17,7 +17,7 @@ from pymmcore_plus.mda.handlers import (
 )
 from useq import MDASequence
 
-from microscope.acquisition import CustomPLogicMDAEngine
+from microscope.acquisition import PLogicMDAEngine
 from microscope.model.hardware_model import HardwareConstants
 
 # Use TYPE_CHECKING to avoid circular import at runtime
@@ -69,7 +69,7 @@ def setup_mda_widget(
         hw: HardwareConstants instance
         save_handler: Optional pre-configured save handler
     """
-    engine = CustomPLogicMDAEngine(mmc, hw)
+    engine = PLogicMDAEngine(mmc, hw)
     mmc.register_mda_engine(engine)
     logger.info("Custom PLogic MDA Engine registered.")
 

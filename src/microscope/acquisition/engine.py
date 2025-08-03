@@ -18,7 +18,7 @@ from microscope.model.hardware_model import HardwareConstants
 logger = logging.getLogger(__name__)
 
 
-class CustomPLogicMDAEngine(MDAEngine):
+class PLogicMDAEngine(MDAEngine):
     """Custom MDA engine for PLogic-driven SPIM Z-stacks."""
 
     def __init__(self, mmc: CMMCorePlus, hw_constants: HardwareConstants):
