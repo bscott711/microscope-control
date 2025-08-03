@@ -25,9 +25,9 @@ class ApplicationController:
     Orchestrates the View, Model, and Acquisition Engine.
     """
 
-    def __init__(self):
+    def __init__(self, hw_constants: HardwareConstants):
         self.mmc = CMMCorePlus.instance()
-        self.model = HardwareConstants()
+        self.model = hw_constants
         self.view = MainView()
         self._original_snap_func: Optional[Callable] = None
         self._original_live_func: Optional[Callable] = None

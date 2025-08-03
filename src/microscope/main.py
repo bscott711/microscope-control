@@ -1,41 +1,47 @@
 # src/microscope/main.py
 """Main entry point for the microscope application."""
 
+import argparse
 import logging
 import sys
+from pathlib import Path
 
 from microscope.controller.application_controller import ApplicationController
+from microscope.model.hardware_model import HardwareConstants
 
 
 def main():
     """Initializes and runs the main application controller."""
+    # --- Parse Command Line Arguments ---
+    parser = argparse.ArgumentParser(description="OPM Control System")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default="hardware_profiles/default_config.yml",
+        help="Path to the YAML configuration file (default: default_config.yml)",
+    )
+    args = parser.parse_args()
+
     # --- CENTRALIZED LOGGING CONFIGURATION ---
-    # Set up the root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
-
-    # Create a handler (e.g., StreamHandler for console output)
     handler = logging.StreamHandler(sys.stdout)
-
-    # Define the format
     formatter = logging.Formatter(fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     handler.setFormatter(formatter)
-
-    # Add the handler to the root logger
     if not root_logger.handlers:
         root_logger.addHandler(handler)
 
-    # --- END CENTRALIZED LOGGING CONFIGURATION ---
-
-    # Now, all loggers created with logging.getLogger(__name__) will inherit this configuration.
     logger = logging.getLogger(__name__)
+    logger.info("Application starting...")
 
     try:
-        logger.info("Application starting...")
-        controller = ApplicationController()
+        # Create HardwareConstants with the specified config file
+        hw_constants = HardwareConstants(config_path=args.config)
+
+        # Pass the config to the controller
+        controller = ApplicationController(hw_constants)
         controller.run()
     except Exception as e:
-        # Use the root logger to ensure the critical message is always seen
         logging.critical("Application failed to start: %s", e, exc_info=True)
         sys.exit(1)
 

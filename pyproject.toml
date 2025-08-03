@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 # --- Core Project Metadata ---
 [project]
 name = "microscope-control"
-version = "0.2.0.dev4"
+version = "0.2.0.dev5"
 description = "OPM Control System"
 readme = "README.md"
 license = "MIT"
@@ -39,6 +39,8 @@ dependencies = [
     "tigerasi>=0.0.27",
     "pymmcore-gui @ git+https://github.com/pymmcore-plus/pymmcore-gui",
     "useq-schema",
+    # CLI dependencies
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
