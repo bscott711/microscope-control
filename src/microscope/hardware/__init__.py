@@ -5,12 +5,13 @@ Public API for hardware control functions.
 This module exposes a simplified interface to the underlying hardware modules.
 """
 
-# Import core utilities
 # Import Camera functions
 from .camera import (
     set_camera_for_hardware_trigger,
     set_camera_trigger_mode_level_high,
 )
+
+# Import core utilities
 from .core import get_property, send_tiger_command, set_property
 
 # Import Galvo functions
@@ -18,6 +19,9 @@ from .galvo import (
     configure_galvo_for_spim_scan,
     trigger_spim_scan_acquisition,
 )
+
+# Import Initializer function
+from .initializer import initialize_system_hardware
 
 # Import PLogic functions
 from .plogic import (
@@ -46,4 +50,6 @@ __all__ = [
     # Camera
     "set_camera_trigger_mode_level_high",
     "set_camera_for_hardware_trigger",
+    # Initializer
+    "initialize_system_hardware",
 ]
