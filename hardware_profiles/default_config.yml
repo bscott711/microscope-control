@@ -24,6 +24,10 @@ hardware:
   plogic_laser_preset_num: 30
   slice_calibration_slope_um_per_deg: 100.0
 
+  # PLogic Presets for Live/Snap (NEW)
+  plogic_live_mode_preset: 12
+  plogic_idle_mode_preset: 10
+
   # Galvo/SPIM Timing
   line_scans_per_slice: 1
   delay_before_scan_ms: 0.0

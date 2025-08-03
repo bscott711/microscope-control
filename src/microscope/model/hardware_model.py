@@ -45,7 +45,9 @@ class HardwareConstants:
     acquisition: AcquisitionSettings = field(init=False)
 
     # The path to the config file can be overridden at instantiation
-    config_path: Path = field(default_factory=lambda: Path("hardware_profiles/default_config.yml"))
+    config_path: Path = field(
+        default_factory=lambda: Path("hardware_profiles/default_config.yml")
+    )
 
     # --- Hardware Labels ---
     galvo_a_label: str = ""
@@ -67,6 +69,10 @@ class HardwareConstants:
     pulses_per_ms: float = 0.0
     plogic_laser_preset_num: int = 0
     slice_calibration_slope_um_per_deg: float = 0.0
+
+    # --- PLogic Presets for Live/Snap ---
+    plogic_live_mode_preset: int = 0
+    plogic_idle_mode_preset: int = 0
 
     # --- Galvo/SPIM Timing ---
     line_scans_per_slice: int = 0

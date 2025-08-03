@@ -8,15 +8,21 @@ and the ASI Tiger controller, used by all other hardware-specific modules.
 
 import logging
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from pymmcore_plus import CMMCorePlus
+
+if TYPE_CHECKING:
+    from microscope.model.hardware_model import HardwareConstants
+
 
 # Set up logger
 logger = logging.getLogger(__name__)
 
 
-def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Optional[str]:
+def get_property(
+    mmc: CMMCorePlus, device_label: str, property_name: str
+) -> Optional[str]:
     """
     Safely gets a Micro-Manager device property value.
 
@@ -28,7 +34,9 @@ def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Opt
     Returns:
         The property value as a string if found, otherwise None.
     """
-    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, property_name):
+    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(
+        device_label, property_name
+    ):
         val = mmc.getProperty(device_label, property_name)
         logger.debug(f"Got {device_label}.{property_name} = {val}")
         return val
@@ -36,7 +44,9 @@ def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Opt
     return None
 
 
-def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value: str) -> bool:
+def set_property(
+    mmc: CMMCorePlus, device_label: str, property_name: str, value: str
+) -> bool:
     """
     Sets a Micro-Manager device property only if it has changed.
 
@@ -70,18 +80,21 @@ def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value:
         return False
 
 
-def send_tiger_command(mmc: CMMCorePlus, cmd: str) -> bool:
+def send_tiger_command(
+    mmc: CMMCorePlus, cmd: str, hw: "HardwareConstants"
+) -> bool:
     """
     Sends a serial command to the TigerCommHub device.
 
     Args:
         mmc: Core instance
         cmd: Serial command to send.
+        hw: HardwareConstants object
 
     Returns:
         True if command was sent, False otherwise.
     """
-    tiger_label = "TigerCommHub"
+    tiger_label = hw.tiger_comm_hub_label
 
     if tiger_label not in mmc.getLoadedDevices():
         logger.error(f"TigerCommHub not loaded. Cannot send command: {cmd}")

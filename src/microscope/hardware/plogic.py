@@ -38,20 +38,22 @@ def open_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
             set_property(mmc, hub_label, hub_prop, "No")
 
         # Clear previous settings
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA X=0")
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA X=0", hw)
 
         # Program a PLogic cell to output a constant HIGH signal
-        send_tiger_command(mmc, f"M E={hw.plogic_always_on_cell}")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=0")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z=5")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCB X=1")
+        send_tiger_command(mmc, f"M E={hw.plogic_always_on_cell}", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=0", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z=5", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCB X=1", hw)
 
         # Route the "always on" cell's output to BNC3
-        send_tiger_command(mmc, f"M E={hw.plogic_bnc3_addr}")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_always_on_cell}")
+        send_tiger_command(mmc, f"M E={hw.plogic_bnc3_addr}", hw)
+        send_tiger_command(
+            mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_always_on_cell}", hw
+        )
 
         # Save settings to card
-        send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z")
+        send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z", hw)
         logger.info("Global shutter is open (BNC3 is HIGH).")
         return True
 
@@ -85,9 +87,9 @@ def close_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
             set_property(mmc, hub_label, hub_prop, "No")
 
         # Route BNC3 output to GND
-        send_tiger_command(mmc, f"M E={hw.plogic_bnc3_addr}")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z=0")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z")
+        send_tiger_command(mmc, f"M E={hw.plogic_bnc3_addr}", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z=0", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z", hw)
         logger.info("Global shutter is closed (BNC3 is LOW).")
         return True
 
@@ -127,35 +129,43 @@ def configure_plogic_for_dual_nrt_pulses(
 
         # Step 1: Program Laser Preset
         logger.debug(f"Setting Laser preset number: {hw.plogic_laser_preset_num}")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA X={hw.plogic_laser_preset_num}")
+        send_tiger_command(
+            mmc, f"{plogic_addr_prefix}CCA X={hw.plogic_laser_preset_num}", hw
+        )
 
         # Step 2: Program Camera Pulse (NRT One-Shot #1)
         logger.debug(f"Programming Camera pulse (cell {hw.plogic_camera_cell})")
         camera_pulse_cycles = int(settings.camera_exposure_ms * hw.pulses_per_ms)
-        send_tiger_command(mmc, f"M E={hw.plogic_camera_cell}")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={camera_pulse_cycles}")
+        send_tiger_command(mmc, f"M E={hw.plogic_camera_cell}", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={camera_pulse_cycles}", hw)
         send_tiger_command(
-            mmc, f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0"
+            mmc,
+            f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0",
+            hw,
         )
 
         # Step 3: Program Laser Pulse (NRT One-Shot #2)
         logger.debug(f"Programming Laser pulse (cell {hw.plogic_laser_on_cell})")
         laser_pulse_cycles = int(settings.laser_trig_duration_ms * hw.pulses_per_ms)
-        send_tiger_command(mmc, f"M E={hw.plogic_laser_on_cell}")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}")
+        send_tiger_command(mmc, f"M E={hw.plogic_laser_on_cell}", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}", hw)
         send_tiger_command(
-            mmc, f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0"
+            mmc,
+            f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0",
+            hw,
         )
 
         # Step 4: Route Camera Trigger Cell Output to BNC1
         logger.debug("Routing Camera Trigger Cell Output to BNC1")
-        send_tiger_command(mmc, "M E=33")
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_camera_cell}")
+        send_tiger_command(mmc, "M E=33", hw)
+        send_tiger_command(
+            mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_camera_cell}", hw
+        )
 
         # Step 5: Save configuration
-        send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z")
+        send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z", hw)
         logger.info("PLogic configured for dual NRT pulses")
         return True
 
@@ -170,19 +180,19 @@ def configure_plogic_for_dual_nrt_pulses(
 
 def enable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
-    Sets PLogic to preset 12 for live/snap mode laser output.
+    Sets PLogic to the live/snap mode laser preset.
     """
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
-    cmd = f"{plogic_addr_prefix}CCA X=12"
+    cmd = f"{plogic_addr_prefix}CCA X={hw.plogic_live_mode_preset}"
     logger.info("Enabling laser for live/snap mode.")
-    return send_tiger_command(mmc, cmd)
+    return send_tiger_command(mmc, cmd, hw)
 
 
 def disable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
-    Sets PLogic to preset 10 to disable laser output after live/snap.
+    Sets PLogic to the idle mode laser preset after live/snap.
     """
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
-    cmd = f"{plogic_addr_prefix}CCA X=10"
+    cmd = f"{plogic_addr_prefix}CCA X={hw.plogic_idle_mode_preset}"
     logger.info("Disabling laser for live/snap mode.")
-    return send_tiger_command(mmc, cmd)
+    return send_tiger_command(mmc, cmd, hw)

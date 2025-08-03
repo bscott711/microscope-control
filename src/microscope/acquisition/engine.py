@@ -47,7 +47,7 @@ class PLogicMDAEngine(MDAEngine):
         if self._should_use_plogic(sequence):
             logger.info("Running custom PLogic Z-stack sequence")
             self._mmc.mda.events.sequenceStarted.emit(sequence, {})
-            self._worker = AcquisitionWorker(self._mmc, sequence,self.HW)
+            self._worker = AcquisitionWorker(self._mmc, sequence, self.HW)
             self._thread = QThread()
             self._worker.moveToThread(self._thread)
 
@@ -65,11 +65,11 @@ class PLogicMDAEngine(MDAEngine):
         """Check if the Core Focus device is the designated Piezo stage."""
         try:
             current_focus_device = self._mmc.getProperty("Core", "Focus")
-            result = current_focus_device == "PiezoStage:P:34"
+            result = current_focus_device == self.HW.piezo_a_label
             logger.debug(
                 "Checking Core Focus. Current: '%s'. Required: '%s'. Use PLogic? %s",
                 current_focus_device,
-                "PiezoStage:P:34",
+                self.HW.piezo_a_label,
                 result,
             )
             return result
