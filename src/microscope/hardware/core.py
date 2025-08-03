@@ -20,9 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def get_property(
-    mmc: CMMCorePlus, device_label: str, property_name: str
-) -> Optional[str]:
+def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Optional[str]:
     """
     Safely gets a Micro-Manager device property value.
 
@@ -34,9 +32,7 @@ def get_property(
     Returns:
         The property value as a string if found, otherwise None.
     """
-    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(
-        device_label, property_name
-    ):
+    if device_label in mmc.getLoadedDevices() and mmc.hasProperty(device_label, property_name):
         val = mmc.getProperty(device_label, property_name)
         logger.debug(f"Got {device_label}.{property_name} = {val}")
         return val
@@ -44,9 +40,7 @@ def get_property(
     return None
 
 
-def set_property(
-    mmc: CMMCorePlus, device_label: str, property_name: str, value: str
-) -> bool:
+def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value: str) -> bool:
     """
     Sets a Micro-Manager device property only if it has changed.
 
@@ -80,9 +74,7 @@ def set_property(
         return False
 
 
-def send_tiger_command(
-    mmc: CMMCorePlus, cmd: str, hw: "HardwareConstants"
-) -> bool:
+def send_tiger_command(mmc: CMMCorePlus, cmd: str, hw: "HardwareConstants") -> bool:
     """
     Sends a serial command to the TigerCommHub device.
 

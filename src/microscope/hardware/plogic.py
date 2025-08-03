@@ -48,9 +48,7 @@ def open_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
 
         # Route the "always on" cell's output to BNC3
         send_tiger_command(mmc, f"M E={hw.plogic_bnc3_addr}", hw)
-        send_tiger_command(
-            mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_always_on_cell}", hw
-        )
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_always_on_cell}", hw)
 
         # Save settings to card
         send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z", hw)
@@ -129,9 +127,7 @@ def configure_plogic_for_dual_nrt_pulses(
 
         # Step 1: Program Laser Preset
         logger.debug(f"Setting Laser preset number: {hw.plogic_laser_preset_num}")
-        send_tiger_command(
-            mmc, f"{plogic_addr_prefix}CCA X={hw.plogic_laser_preset_num}", hw
-        )
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA X={hw.plogic_laser_preset_num}", hw)
 
         # Step 2: Program Camera Pulse (NRT One-Shot #1)
         logger.debug(f"Programming Camera pulse (cell {hw.plogic_camera_cell})")
@@ -160,9 +156,7 @@ def configure_plogic_for_dual_nrt_pulses(
         # Step 4: Route Camera Trigger Cell Output to BNC1
         logger.debug("Routing Camera Trigger Cell Output to BNC1")
         send_tiger_command(mmc, "M E=33", hw)
-        send_tiger_command(
-            mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_camera_cell}", hw
-        )
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={hw.plogic_camera_cell}", hw)
 
         # Step 5: Save configuration
         send_tiger_command(mmc, f"{plogic_addr_prefix}SS Z", hw)

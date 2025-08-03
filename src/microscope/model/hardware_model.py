@@ -45,9 +45,7 @@ class HardwareConstants:
     acquisition: AcquisitionSettings = field(init=False)
 
     # The path to the config file can be overridden at instantiation
-    config_path: Path = field(
-        default_factory=lambda: Path("hardware_profiles/default_config.yml")
-    )
+    config_path: Path = field(default_factory=lambda: Path("hardware_profiles/default_config.yml"))
 
     # --- Hardware Labels ---
     galvo_a_label: str = ""
