@@ -45,11 +45,11 @@ class AcquisitionWorker(QObject):
     frameReady = Signal(object, object, object)
     acquisitionFinished = Signal(object)
 
-    def __init__(self, mmc: CMMCorePlus, sequence: MDASequence, parent=None):
+    def __init__(self, mmc: CMMCorePlus, sequence: MDASequence, hw_constants: HardwareConstants, parent=None):
         super().__init__(parent)
         self._mmc = mmc
         self.sequence = sequence
-        self.HW = HardwareConstants()
+        self.HW = hw_constants
         self._running = True
 
     def stop(self):

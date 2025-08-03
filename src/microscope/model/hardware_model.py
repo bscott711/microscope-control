@@ -41,6 +41,9 @@ class HardwareConstants:
     Loads configuration from a YAML file.
     """
 
+    # This object will hold the acquisition settings loaded from the config
+    acquisition: AcquisitionSettings = field(init=False)
+
     # The path to the config file can be overridden at instantiation
     config_path: Path = field(default_factory=lambda: Path("hardware_profiles/default_config.yml"))
 
@@ -53,18 +56,17 @@ class HardwareConstants:
     tiger_comm_hub_label: str = ""
 
     # --- PLogic Address Constants (Decimal) ---
-    # These are the actual addresses used in the Tiger serial commands
-    plogic_trigger_ttl_addr: int = 0  # TTL trigger input
-    plogic_4khz_clock_addr: int = 0  # 4KHz clock input
-    plogic_laser_on_cell: int = 0  # Logic cell for laser pulse
-    plogic_camera_cell: int = 0  # Logic cell for camera pulse
-    plogic_always_on_cell: int = 0  # Logic cell for constant HIGH (shutter)
-    plogic_bnc3_addr: int = 0  # Address for BNC3 output
+    plogic_trigger_ttl_addr: int = 0
+    plogic_4khz_clock_addr: int = 0
+    plogic_laser_on_cell: int = 0
+    plogic_camera_cell: int = 0
+    plogic_always_on_cell: int = 0
+    plogic_bnc3_addr: int = 0
 
     # --- PLogic Calibration & Timing ---
-    pulses_per_ms: float = 0.0  # For converting ms to logic cycles
-    plogic_laser_preset_num: int = 0  # Preset number to turn on lasers
-    slice_calibration_slope_um_per_deg: float = 0.0  # For converting Z range to galvo amplitude
+    pulses_per_ms: float = 0.0
+    plogic_laser_preset_num: int = 0
+    slice_calibration_slope_um_per_deg: float = 0.0
 
     # --- Galvo/SPIM Timing ---
     line_scans_per_slice: int = 0
@@ -79,7 +81,7 @@ class HardwareConstants:
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
 
         try:
-            with open(self.config_path) as f:
+            with self.config_path.open() as f:
                 config = yaml.safe_load(f)
 
             hw_config = config.get("hardware", {})
@@ -92,12 +94,8 @@ class HardwareConstants:
                 else:
                     logger.warning(f"Unknown hardware config key: {key}")
 
-            # Set default acquisition settings
-            for key, value in acq_config.items():
-                if hasattr(self, key):
-                    setattr(self, key, value)
-                else:
-                    logger.warning(f"Unknown acquisition config key: {key}")
+            # Create an AcquisitionSettings instance from the config values
+            self.acquisition = AcquisitionSettings(**acq_config)
 
             logger.info(f"Hardware configuration loaded from {self.config_path}")
 

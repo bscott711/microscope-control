@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class CustomPLogicMDAEngine(MDAEngine):
     """Custom MDA engine for PLogic-driven SPIM Z-stacks."""
 
-    def __init__(self, mmc: CMMCorePlus, hw: HardwareConstants):
+    def __init__(self, mmc: CMMCorePlus, hw_constants: HardwareConstants):
         """Initialize the engine with the core instance and hardware constants.
         Args:
             mmc: The Micro-Manager core instance
@@ -29,7 +29,7 @@ class CustomPLogicMDAEngine(MDAEngine):
         """
         super().__init__(mmc)
         self._mmc = mmc
-        self.HW = hw
+        self.HW = hw_constants
         self._worker = None
         self._thread = None
         self._frame_buffer = {}
@@ -47,7 +47,7 @@ class CustomPLogicMDAEngine(MDAEngine):
         if self._should_use_plogic(sequence):
             logger.info("Running custom PLogic Z-stack sequence")
             self._mmc.mda.events.sequenceStarted.emit(sequence, {})
-            self._worker = AcquisitionWorker(self._mmc, sequence)
+            self._worker = AcquisitionWorker(self._mmc, sequence,self.HW)
             self._thread = QThread()
             self._worker.moveToThread(self._thread)
 
