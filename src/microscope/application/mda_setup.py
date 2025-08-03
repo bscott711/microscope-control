@@ -5,7 +5,9 @@ Responsible for wiring the MDA widget to the custom PLogic MDA engine.
 This isolates the complex MDA setup logic from the main application controller.
 """
 
+import json
 import logging
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -15,6 +17,7 @@ from pymmcore_plus.mda.handlers import (
     OMETiffWriter,
     OMEZarrWriter,
 )
+from pymmcore_plus.metadata import FrameMetaV1, to_builtins
 from useq import MDASequence
 
 from microscope.acquisition import PLogicMDAEngine
@@ -33,6 +36,8 @@ class OMETiffWriterWithMetadata(OMETiffWriter):
     def __init__(self, filename: str):
         super().__init__(filename)
         self._basename = Path(filename).with_suffix("").name
+        # This now correctly matches the type in the base class
+        self.frame_metadatas: defaultdict[str, list[FrameMetaV1]] = defaultdict(list)
 
     def sequenceStarted(self, seq: MDASequence, meta: object = object()):
         super().sequenceStarted(seq, meta)
@@ -41,13 +46,15 @@ class OMETiffWriterWithMetadata(OMETiffWriter):
         seq_path = self._meta_dir / f"{self._basename}_useq_MDASequence.json"
         seq_path.write_text(seq.model_dump_json(indent=2))
 
+    def frameReady(self, frame, event, meta):
+        super().frameReady(frame, event, meta)
+        # The defaultdict simplifies this logic
+        key = str(event.index.get("p", 0))
+        self.frame_metadatas[key].append(meta)
+
     def sequenceFinished(self, seq: MDASequence):
         super().sequenceFinished(seq)
-        if hasattr(self, "frame_metadatas") and self.frame_metadatas:
-            import json
-
-            from pymmcore_plus.metadata import to_builtins
-
+        if self.frame_metadatas:
             serializable_meta = {
                 pos_key: [to_builtins(m) for m in metas] for pos_key, metas in self.frame_metadatas.items()
             }
@@ -60,14 +67,18 @@ def setup_mda_widget(
     mmc: CMMCorePlus,
     hw: HardwareConstants,
     save_handler: Optional[Union[OMETiffWriter, OMEZarrWriter, ImageSequenceWriter]] = None,
-):
+) -> PLogicMDAEngine:
     """
     Wires the MDA widget to use the CustomPLogicMDAEngine.
+
     Args:
         mda_widget: The MDA widget from pymmcore-gui
         mmc: Core instance
         hw: HardwareConstants instance
         save_handler: Optional pre-configured save handler
+
+    Returns:
+        The configured PLogicMDAEngine instance.
     """
     engine = PLogicMDAEngine(mmc, hw)
     mmc.register_mda_engine(engine)
@@ -82,11 +93,11 @@ def setup_mda_widget(
         if not handler and save_info["should_save"]:
             save_path = Path(save_info["save_dir"]) / save_info["save_name"]
             if save_path.suffix.lower() in {".zarr", ".ome.zarr"}:
-                handler = OMEZarrWriter(save_path, overwrite=True)
+                handler = OMEZarrWriter(str(save_path), overwrite=True)
             elif save_path.suffix.lower() in {".tif", ".tiff", ".ome.tif", ".ome.tiff"}:
                 handler = OMETiffWriterWithMetadata(str(save_path))
             else:
-                handler = ImageSequenceWriter(save_path)
+                handler = ImageSequenceWriter(str(save_path))
 
         # Connect handler to MDA events
         if handler:
@@ -111,3 +122,5 @@ def setup_mda_widget(
         logger.info("MDA 'Run' button has been wired to use CustomPLogicMDAEngine.")
     else:
         logger.error("MDA widget does not have 'execute_mda' attribute.")
+
+    return engine
