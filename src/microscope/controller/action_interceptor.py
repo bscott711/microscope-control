@@ -10,7 +10,7 @@ from typing import Callable, Optional
 from pymmcore_gui.actions import core_actions
 from pymmcore_plus import CMMCorePlus
 
-from microscope.hardware import disable_live_laser, enable_live_laser
+from microscope.hardware import disable_live_laser, enable_live_laser, set_property
 from microscope.model.hardware_model import HardwareConstants
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ class ActionInterceptor:
         def snap_with_laser(*args, **kwargs) -> None:
             """Enable laser, snap, and schedule cleanup."""
             logger.info("Snap action triggered.")
-            self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "Yes")
+            set_property(self.mmc, self.model.galvo_a_label, "BeamEnabled", "Yes")
             enable_live_laser(self.mmc, self.model)
             self.mmc.events.imageSnapped.connect(snap_cleanup)
             self._original_snap_func(*args, **kwargs)  # type: ignore
@@ -71,7 +71,7 @@ class ActionInterceptor:
                 disable_live_laser(self.mmc, self.model)
                 logger.info("Live mode, laser disabled.")
             else:
-                self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "Yes")
+                set_property(self.mmc, self.model.galvo_a_label, "BeamEnabled", "Yes")
                 enable_live_laser(self.mmc, self.model)
                 self._original_live_func(*args, **kwargs)  # type: ignore
                 logger.info("Live mode and laser enabled.")

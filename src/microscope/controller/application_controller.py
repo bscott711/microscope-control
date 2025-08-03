@@ -10,7 +10,11 @@ from pymmcore_gui import WidgetAction
 from pymmcore_plus import CMMCorePlus
 
 from microscope.application import setup_mda_widget
-from microscope.hardware import close_global_shutter, initialize_system_hardware
+from microscope.hardware import (
+    close_global_shutter,
+    initialize_system_hardware,
+    set_property,
+)
 from microscope.model.hardware_model import HardwareConstants
 from microscope.view.main_view import MainView
 
@@ -74,7 +78,7 @@ class ApplicationController:
     def _on_exit(self) -> None:
         """Clean up hardware state and restore actions on exit."""
         logger.info("Application closing. Cleaning up hardware.")
-        self.mmc.setProperty(self.model.galvo_a_label, "BeamEnabled", "No")
+        set_property(self.mmc, self.model.galvo_a_label, "BeamEnabled", "No")
         close_global_shutter(self.mmc, self.model)
         self.interceptor.restore_actions()
         logger.info("Cleanup complete.")
