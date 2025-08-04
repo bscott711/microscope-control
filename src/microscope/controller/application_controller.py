@@ -42,9 +42,9 @@ class ApplicationController:
         self.engine: Optional[PLogicMDAEngine] = None
         self._setup_logic()
 
-    def run(self) -> None:
+    def run(self) -> int:
         """Starts the application by showing the main view."""
-        self.view.show()
+        return self.view.show()
 
     def _setup_logic(self) -> None:
         """Wire up all the application logic."""
