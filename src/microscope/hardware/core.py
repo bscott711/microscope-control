@@ -20,9 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def get_property(
-    mmc: CMMCorePlus, device_label: str, property_name: str
-) -> Optional[str]:
+def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Optional[str]:
     """
     Safely gets a Micro-Manager device property value.
 
@@ -46,9 +44,7 @@ def get_property(
     return val
 
 
-def set_property(
-    mmc: CMMCorePlus, device_label: str, property_name: str, value: Any
-) -> bool:
+def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value: Any) -> bool:
     """
     Sets a Micro-Manager device property, checking for existence and changes.
 

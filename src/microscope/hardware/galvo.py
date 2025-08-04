@@ -12,7 +12,7 @@ from pymmcore_plus import CMMCorePlus
 
 from microscope.model.hardware_model import HardwareConstants
 
-from .core import set_property
+from .core import get_property, set_property
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -27,65 +27,80 @@ def configure_galvo_for_spim_scan(
     hw: HardwareConstants,
 ) -> bool:
     """
-    Configures the Galvo device for SPIM scanning.
+    Configures the Galvo device for SPIM scanning by setting a block of properties.
+
     Args:
-        mmc: Core instance
-        galvo_amplitude_deg: Amplitude in degrees
-        num_slices: Number of slices to scan
-        num_repeats: Number of times to repeat the volume scan (for time-series).
-        repeat_delay_ms: Delay in ms between volume repeats.
-        hw: Hardware constants object
+        mmc: The CMMCorePlus instance.
+        galvo_amplitude_deg: The scanning amplitude in degrees.
+        num_slices: The number of slices to scan in a volume.
+        num_repeats: The number of times to repeat the volume scan (for time-series).
+        repeat_delay_ms: The delay in milliseconds between volume repeats.
+        hw: The hardware constants object.
+
     Returns:
-        True if configuration succeeded
+        True if all configuration properties were set successfully, False otherwise.
     """
     galvo_label = hw.galvo_a_label
-    logger.info(f"Configuring {galvo_label} for SPIM scan")
-    try:
-        # Enable the beam
-        set_property(mmc, galvo_label, "BeamEnabled", "Yes")
+    logger.info(f"Configuring {galvo_label} for SPIM scan...")
 
-        # Set SPIM parameters
-        set_property(mmc, galvo_label, "SPIMNumSlicesPerPiezo", str(hw.line_scans_per_slice))
-        set_property(mmc, galvo_label, "SPIMDelayBeforeRepeat(ms)", str(repeat_delay_ms))
-        set_property(mmc, galvo_label, "SPIMNumRepeats", str(num_repeats))
-        set_property(mmc, galvo_label, "SPIMDelayBeforeSide(ms)", str(hw.delay_before_side_ms))
-        set_property(mmc, galvo_label, "SPIMAlternateDirectionsEnable", "No")
-        set_property(mmc, galvo_label, "SPIMScanDuration(ms)", str(hw.line_scan_duration_ms))
-        set_property(mmc, galvo_label, "SingleAxisYAmplitude(deg)", str(galvo_amplitude_deg))
-        set_property(mmc, galvo_label, "SingleAxisYOffset(deg)", "0")
-        set_property(mmc, galvo_label, "SPIMNumSlices", str(num_slices))
-        set_property(mmc, galvo_label, "SPIMNumSides", "1")
-        set_property(mmc, galvo_label, "SPIMFirstSide", "A")
-        set_property(mmc, galvo_label, "SPIMPiezoHomeDisable", "No")
-        set_property(mmc, galvo_label, "SPIMInterleaveSidesEnable", "No")
-        set_property(mmc, galvo_label, "SingleAxisXAmplitude(deg)", "0")
-        set_property(mmc, galvo_label, "SingleAxisXOffset(deg)", "0")
+    # Define all parameters as a dictionary for clarity and easy modification.
+    # The `set_property` helper handles converting values to strings.
+    params = {
+        "BeamEnabled": "Yes",
+        "SPIMAlternateDirectionsEnable": "No",
+        "SPIMInterleaveSidesEnable": "No",
+        "SPIMPiezoHomeDisable": "No",
+        "SPIMNumSides": 1,
+        "SPIMFirstSide": "A",
+        "SingleAxisXAmplitude(deg)": 0,
+        "SingleAxisXOffset(deg)": 0,
+        "SingleAxisYOffset(deg)": 0,
+        "SPIMNumSlicesPerPiezo": hw.line_scans_per_slice,
+        "SPIMDelayBeforeSide(ms)": hw.delay_before_side_ms,
+        "SPIMScanDuration(ms)": hw.line_scan_duration_ms,
+        "SPIMNumRepeats": num_repeats,
+        "SPIMDelayBeforeRepeat(ms)": repeat_delay_ms,
+        "SingleAxisYAmplitude(deg)": galvo_amplitude_deg,
+        "SPIMNumSlices": num_slices,
+    }
 
-        logger.info("Galvo configured for SPIM scan")
-        return True
+    # Atomically apply all properties; fail if any single one fails.
+    for prop, value in params.items():
+        if not set_property(mmc, galvo_label, prop, value):
+            logger.error(
+                f"Failed to configure {galvo_label}. Could not set property '{prop}' to '{value}'.",
+            )
+            return False
 
-    except Exception as e:
-        logger.error(f"Error configuring galvo: {e}", exc_info=True)
-        return False
+    logger.info(f"{galvo_label} configured successfully for SPIM scan.")
+    return True
 
 
-def trigger_spim_scan_acquisition(mmc: CMMCorePlus, galvo_label: str, hw: HardwareConstants) -> bool:
+def trigger_spim_scan_acquisition(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
-    Triggers the SPIM scan acquisition by setting SPIMState to Running.
+    Triggers the SPIM scan acquisition and verifies the state change.
+
     Args:
-        mmc: Core instance
-        galvo_label: Label of the galvo device
-        hw: Hardware constants object (unused here but included for consistency)
+        mmc: The CMMCorePlus instance.
+        hw: The hardware constants object.
+
     Returns:
-        True if trigger was sent successfully
+        True if the trigger was sent and the state was verified as 'Running'.
     """
-    logger.info("Triggering SPIM scan acquisition...")
-    try:
-        set_property(mmc, galvo_label, "SPIMState", "Running")
-        # Verify the state was set
-        spim_state = mmc.getProperty(galvo_label, "SPIMState")
-        logger.debug(f"{galvo_label} SPIMState: {spim_state}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to start SPIM scan: {e}", exc_info=True)
+    galvo_label = hw.galvo_a_label
+    logger.info(f"Triggering SPIM scan acquisition on {galvo_label}...")
+
+    if not set_property(mmc, galvo_label, "SPIMState", "Running"):
+        logger.error(f"Failed to send 'Running' trigger to {galvo_label}.")
         return False
+
+    # Verify that the state changed as expected
+    spim_state = get_property(mmc, galvo_label, "SPIMState")
+    if spim_state == "Running":
+        logger.info(f"{galvo_label} state is now 'Running'.")
+        return True
+
+    logger.error(
+        f"Sent trigger to {galvo_label}, but current state is '{spim_state}'.",
+    )
+    return False
