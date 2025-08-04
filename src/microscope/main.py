@@ -17,7 +17,7 @@ def _setup_logging() -> None:
     # Prevent adding duplicate handlers if this is ever called more than once.
     if root_logger.hasHandlers():
         return
-    root_logger.setLevel(logging.DEBUG)
+    root_logger.setLevel(logging.INFO)
     handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
