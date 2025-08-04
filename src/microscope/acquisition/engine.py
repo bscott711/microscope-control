@@ -9,7 +9,7 @@ from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
-from qtpy.QtCore import Qt, QThread
+from qtpy.QtCore import QMetaObject, Qt, QThread
 from useq import (
     AnyTimePlan,
     AnyZPlan,
@@ -21,12 +21,13 @@ from useq import (
     ZRangeAround,
 )
 
-from microscope.acquisition.worker import AcquisitionWorker, TimingParams
+from microscope.acquisition.worker import AcquisitionWorker
 from microscope.hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
     set_camera_for_hardware_trigger,
     set_property,
+    trigger_spim_scan_acquisition,
 )
 from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
 
@@ -43,35 +44,55 @@ class PLogicMDAEngine(MDAEngine):
         self._worker: Optional[AcquisitionWorker] = None
         self._thread: Optional[QThread] = None
         self._frame_buffer: dict = {}
+        self._sequence: Optional[MDASequence] = None
+        self._original_autoshutter: bool = False
 
     def run(self, sequence: MDASequence) -> None:
         """Run an MDA sequence, handling setup, execution, and cleanup."""
         self._frame_buffer.clear()
         self._sequence = sequence
+        self._original_autoshutter = self._mmc.getAutoShutter()
 
         if self._should_use_plogic(sequence):
             logger.info("Running custom PLogic Z-stack sequence")
             self._mmc.mda.events.sequenceStarted.emit(sequence, {})
 
-            params = self._calculate_timing_params(sequence)
-            if not params or not self._configure_hardware(sequence, params):
-                self._mmc.mda.events.sequenceFinished.emit(sequence)
+            if not self._setup_hardware(sequence):
+                # Ensure we clean up even if setup fails
+                self._cleanup_hardware(sequence)
                 return
 
-            self._worker = AcquisitionWorker(self._mmc, sequence, self.HW, params)
+            # The total number of images is simply the total length of the sequence iterable
+            total_images = len(list(sequence))
+
+            self._worker = AcquisitionWorker(self._mmc, sequence, self.HW, total_images)
             self._thread = QThread()
             self._worker.moveToThread(self._thread)
 
-            self._worker.frameReady.connect(
-                self._on_frame_ready, Qt.ConnectionType.QueuedConnection
-            )
-            self._thread.started.connect(self._worker.run)
-            self._worker.acquisitionFinished.connect(self._on_acquisition_finished)
+            self._worker.frameReady.connect(self._on_frame_ready, Qt.ConnectionType.QueuedConnection)
+            self._worker.acquisitionFinished.connect(self._on_acquisition_finished, Qt.ConnectionType.QueuedConnection)
+            self._thread.started.connect(self._start_worker_and_hardware)
 
             self._thread.start()
         else:
             logger.info("Falling back to default MDA engine")
             self._mmc.run_mda(sequence)
+
+    def _start_worker_and_hardware(self):
+        """Trigger hardware from the main thread, then start the worker's loop."""
+        if not self._worker:
+            return
+
+        # These calls now safely execute in the main thread.
+        self._mmc.startSequenceAcquisition(self.HW.camera_a_label, self._worker.total_images, 0, True)
+        trigger_spim_scan_acquisition(self._mmc, self.HW)
+
+        # Asynchronously invoke the worker's run method in its own thread.
+        QMetaObject.invokeMethod(
+            self._worker,
+            b"run",  # Method name must be bytes
+            Qt.ConnectionType.QueuedConnection,
+        )
 
     def _should_use_plogic(self, sequence: MDASequence) -> bool:
         """Check if the Core Focus device is the designated Piezo stage."""
@@ -82,62 +103,50 @@ class PLogicMDAEngine(MDAEngine):
             logger.warning("Could not verify Core Focus device, falling back. Error: %s", e)
             return False
 
-    def _calculate_timing_params(self, sequence: MDASequence) -> Optional[TimingParams]:
-        """Calculates and validates timing parameters from the MDASequence."""
-        if not sequence.z_plan:
-            logger.error("PLogic acquisition requires a Z-plan.")
-            return None
-
-        try:
-            z_axis_index = sequence.axis_order.index("z")
-            num_z = sequence.shape[z_axis_index]
-        except ValueError:
-            num_z = 1
-
-        num_t = sequence.shape[0]
-        interval_s = self._get_time_interval_s(sequence.time_plan)
-        scan_duration_s = (num_z * self._mmc.getExposure()) / 1000.0
-        repeat_delay_s = interval_s - scan_duration_s
-        repeat_delay_ms = max(0, repeat_delay_s * 1000.0)
-
-        return TimingParams(
-            num_z_slices=num_z,
-            num_timepoints=num_t,
-            repeat_delay_ms=repeat_delay_ms,
-            total_images=num_z * num_t,
-        )
-
-    def _configure_hardware(
-        self, sequence: MDASequence, params: TimingParams
-    ) -> bool:
-        """Configures all hardware components for the full MDA sequence."""
+    def _setup_hardware(self, sequence: MDASequence) -> bool:
+        """Configure all hardware for the sequence. Runs in the main thread."""
         z_plan = sequence.z_plan
         if not z_plan:
+            logger.error("PLogic acquisition requires a Z-plan.")
             return False
 
+        try:
+            num_z = sequence.shape[sequence.axis_order.index("z")]
+            num_t = sequence.shape[sequence.axis_order.index("t")]
+        except ValueError:
+            logger.error("Sequence must have 't' and 'z' axes for PLogic acquisition.")
+            return False
+
+        interval_s = self._get_time_interval_s(sequence.time_plan)
+        scan_duration_s = (num_z * self._mmc.getExposure()) / 1000.0
+        repeat_delay_ms = max(0, (interval_s - scan_duration_s) * 1000.0)
+
+        self._mmc.setAutoShutter(False)
         if not set_camera_for_hardware_trigger(self._mmc, self.HW.camera_a_label):
-            logger.error("Failed to set camera to external trigger mode.")
             return False
 
         settings = AcquisitionSettings(
-            num_slices=params.num_z_slices,
+            num_slices=num_z,
             step_size_um=self._get_z_step_size(z_plan),
             camera_exposure_ms=self._mmc.getExposure(),
         )
         configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
 
-        z_positions = list(z_plan)
         galvo_amplitude_deg = 0.0
-        if len(z_positions) > 1:
-            z_range = max(z_positions) - min(z_positions)
-            galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
+        try:
+            z_positions = list(z_plan)
+            if len(z_positions) > 1:
+                z_range = max(z_positions) - min(z_positions)
+                galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
+        except TypeError:
+            logger.warning("Z-plan is not iterable, cannot calculate galvo amplitude from range.")
 
         configure_galvo_for_spim_scan(
             self._mmc,
             galvo_amplitude_deg,
-            params.num_z_slices,
-            num_repeats=params.num_timepoints,
-            repeat_delay_ms=params.repeat_delay_ms,
+            num_z,
+            num_repeats=num_t,
+            repeat_delay_ms=repeat_delay_ms,
             hw=self.HW,
         )
         return True
@@ -159,10 +168,9 @@ class PLogicMDAEngine(MDAEngine):
         """Resets hardware to a safe, idle state after acquisition."""
         logger.info("Cleaning up hardware state...")
         self._mmc.stopSequenceAcquisition()
-        set_property(
-            self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger"
-        )
+        set_property(self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger")
         set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
+        self._mmc.setAutoShutter(self._original_autoshutter)
         self._mmc.mda.events.sequenceFinished.emit(sequence)
 
     def _on_acquisition_finished(self, sequence: MDASequence) -> None:

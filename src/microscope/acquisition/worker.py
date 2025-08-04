@@ -6,28 +6,15 @@ Runs in a separate thread and emits frames as they are collected.
 
 import logging
 import time
-from dataclasses import dataclass
-from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.metadata import frame_metadata
-from qtpy.QtCore import QObject, Signal  # type: ignore
+from qtpy.QtCore import QObject, Signal, Slot  # type: ignore
 from useq import MDAEvent, MDASequence
 
-from microscope.hardware import trigger_spim_scan_acquisition
 from microscope.model.hardware_model import HardwareConstants
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class TimingParams:
-    """A simple container for calculated acquisition timing parameters."""
-
-    num_z_slices: int
-    num_timepoints: int
-    repeat_delay_ms: float
-    total_images: int
 
 
 class AcquisitionWorker(QObject):
@@ -43,14 +30,14 @@ class AcquisitionWorker(QObject):
         mmc: CMMCorePlus,
         sequence: MDASequence,
         hw_constants: HardwareConstants,
-        params: TimingParams,
-        parent: Optional[QObject] = None,
+        total_images: int,
+        parent=None,
     ):
         super().__init__(parent)
         self._mmc = mmc
         self.sequence = sequence
         self.hw = hw_constants
-        self.params = params
+        self.total_images = total_images
         self._running = True
 
     def stop(self) -> None:
@@ -58,19 +45,19 @@ class AcquisitionWorker(QObject):
         logger.info("Stop requested for acquisition worker.")
         self._running = False
 
+    @Slot()
     def run(self) -> None:
         """
-        Triggers the hardware sequence and collects incoming frames.
-        This method is designed to be run in a separate QThread.
+        Executes the image collection loop for a hardware-timed sequence.
+        Assumes hardware has already been configured and started by the engine.
         """
         try:
-            self._mmc.startSequenceAcquisition(self.hw.camera_a_label, self.params.total_images, 0, True)
-            trigger_spim_scan_acquisition(self._mmc, self.hw)
+            logger.info("Acquisition worker now polling for frames.")
 
             sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
             events = iter(sequence)
 
-            for _ in range(self.params.total_images):
+            for _ in range(self.total_images):
                 if not self._running:
                     logger.info("Acquisition stopped by user.")
                     break
@@ -81,7 +68,14 @@ class AcquisitionWorker(QObject):
                         break
                     time.sleep(0.001)
 
+                if not self._mmc.isSequenceRunning() and self._mmc.getRemainingImageCount() == 0:
+                    break
+
                 tagged_img = self._mmc.popNextTaggedImage()
+                if tagged_img is None:
+                    logger.warning("Popped a null image, continuing.")
+                    continue
+
                 event = next(events)
                 meta = frame_metadata(self._mmc, mda_event=event)
                 self.frameReady.emit(tagged_img.pix, event, meta)
