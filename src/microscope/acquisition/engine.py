@@ -8,7 +8,7 @@ import logging
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
-from qtpy.QtCore import QThread
+from qtpy.QtCore import Qt, QThread
 from useq import MDASequence
 
 from microscope.acquisition.worker import AcquisitionWorker
@@ -52,7 +52,7 @@ class PLogicMDAEngine(MDAEngine):
             self._worker.moveToThread(self._thread)
 
             # Connect signals
-            self._worker.frameReady.connect(self._on_frame_ready)
+            self._worker.frameReady.connect(self._on_frame_ready, Qt.ConnectionType.QueuedConnection)
             self._thread.started.connect(self._worker.run)
             self._worker.acquisitionFinished.connect(self._on_acquisition_finished)
 

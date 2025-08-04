@@ -6,11 +6,16 @@ Runs in a separate thread and emits frames as they are collected.
 
 import logging
 import time
+from dataclasses import dataclass
+from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.metadata import frame_metadata
 from qtpy.QtCore import QObject, Signal  # type: ignore
 from useq import (
+    AnyTimePlan,
+    AnyZPlan,
+    MDAEvent,
     MDASequence,
     MultiPhaseTimePlan,
     TIntervalLoops,
@@ -27,165 +32,205 @@ from microscope.hardware import (
 )
 from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
 
-# Set up logger
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TimingParams:
+    """A simple container for calculated acquisition timing parameters."""
+
+    num_z_slices: int
+    num_timepoints: int
+    repeat_delay_ms: float
+    total_images: int
 
 
 class AcquisitionWorker(QObject):
     """
     Worker object for running hardware-timed acquisitions in a separate thread.
-
-    Signals:
-        frameReady (object, object, object): Emitted when a new frame is ready.
-                                              Provides (image, event, metadata).
-        acquisitionFinished (object): Emitted when the acquisition is finished.
-                                      Provides the sequence object.
     """
 
-    frameReady = Signal(object, object, object)
-    acquisitionFinished = Signal(object)
+    # FIX: The metadata is a dict. The signal signature is now aligned
+    # with the core pymmcore-plus frameReady signal.
+    frameReady = Signal(object, MDAEvent, dict)
+    acquisitionFinished = Signal(MDASequence)
 
-    def __init__(self, mmc: CMMCorePlus, sequence: MDASequence, hw_constants: HardwareConstants, parent=None):
+    def __init__(
+        self,
+        mmc: CMMCorePlus,
+        sequence: MDASequence,
+        hw_constants: HardwareConstants,
+        parent: Optional[QObject] = None,
+    ):
         super().__init__(parent)
         self._mmc = mmc
         self.sequence = sequence
-        self.HW = hw_constants
+        self.hw = hw_constants
         self._running = True
 
-    def stop(self):
-        """Stop the acquisition."""
+    def stop(self) -> None:
+        """Flags the acquisition to stop gracefully."""
+        logger.info("Stop requested for acquisition worker.")
         self._running = False
 
-    def run(self):
-        """Execute a hardware-timed MDA sequence."""
-        original_autoshutter = self._mmc.getAutoShutter()
+    def run(self) -> None:
+        """
+        Executes a hardware-timed MDA sequence by orchestrating the setup,
+        execution, and cleanup phases.
+        """
+        self._original_autoshutter = self._mmc.getAutoShutter()
+        self._mmc.setAutoShutter(False)
+        logger.info("Starting acquisition worker.")
 
+        try:
+            params = self._calculate_timing_params()
+            if not params:
+                return
+
+            if not self._configure_hardware(params):
+                return
+
+            self._execute_and_collect(params)
+
+        except Exception as _:
+            logger.critical("Acquisition failed due to an unexpected error.", exc_info=True)
+        finally:
+            self._cleanup_hardware()
+            self.acquisitionFinished.emit(self.sequence)
+            logger.info("Acquisition worker finished.")
+
+    def _calculate_timing_params(self) -> Optional[TimingParams]:
+        """Calculates and validates timing parameters from the MDASequence."""
         if not self.sequence.z_plan:
             logger.error("PLogic acquisition requires a Z-plan.")
-            return
+            return None
 
-        # --- Get sequence parameters ---
-        num_z_slices = len(list(self.sequence.z_plan))
-        num_timepoints = self.sequence.shape[0]
+        try:
+            z_axis_index = self.sequence.axis_order.index("z")
+            num_z = self.sequence.shape[z_axis_index]
+        except ValueError:
+            num_z = 1
+
+        num_t = self.sequence.shape[0]
         interval_s = self._get_time_interval_s(self.sequence.time_plan)
-        # The controller delay is from the end of one scan to the start of the next.
-        # We must subtract the time it takes to acquire one z-stack.
-        scan_duration_s = (num_z_slices * self._mmc.getExposure()) / 1000.0
+        scan_duration_s = (num_z * self._mmc.getExposure()) / 1000.0
         repeat_delay_s = interval_s - scan_duration_s
         repeat_delay_ms = max(0, repeat_delay_s * 1000.0)
 
-        # Add a warning if no interval is set for a multi-timepoint acquisition
-        if num_timepoints > 1 and interval_s <= 0:
+        if num_t > 1 and interval_s <= 0:
+            logger.warning("Multi-timepoint acquisition has no interval; running ASAP.")
+        elif num_t > 1 and repeat_delay_s < 0:
             logger.warning(
-                "Acquisition has multiple timepoints but no interval is set. "
-                "The hardware will acquire all timepoints as fast as possible."
-            )
-        elif num_timepoints > 1 and repeat_delay_s < 0:
-            logger.warning(
-                "The requested time interval (%.2fs) is shorter than the Z-stack "
-                "duration (%.2fs). Subsequent timepoints will be acquired with "
-                "minimal delay.",
+                "Time interval (%.2fs) is shorter than Z-stack duration (%.2fs). "
+                "Acquiring subsequent timepoints with minimal delay.",
                 interval_s,
                 scan_duration_s,
             )
 
-        total_images_expected = num_z_slices * num_timepoints
         logger.info(
-            "Starting hardware-timed series: %d timepoints, %d z-slices, %.2f ms interval",
-            num_timepoints,
-            num_z_slices,
+            "Starting acquisition: %d timepoints, %d z-slices, %.2f ms interval.",
+            num_t,
+            num_z,
             repeat_delay_ms,
         )
+        return TimingParams(
+            num_z_slices=num_z,
+            num_timepoints=num_t,
+            repeat_delay_ms=repeat_delay_ms,
+            total_images=num_z * num_t,
+        )
 
-        try:
-            # ----------------- ONE-TIME HARDWARE SETUP -----------------
-            self._mmc.setAutoShutter(False)
-            if not set_camera_for_hardware_trigger(self._mmc, self.HW.camera_a_label):
-                raise RuntimeError("Failed to set camera to external trigger mode")
+    def _configure_hardware(self, params: TimingParams) -> bool:
+        """Configures all hardware components for the full MDA sequence."""
+        logger.info("Configuring hardware for MDA sequence...")
+        z_plan = self.sequence.z_plan
+        if not z_plan:
+            logger.error("Z-plan is missing; cannot configure hardware.")
+            return False
 
-            step_size = self._get_z_step_size(self.sequence.z_plan)
-            settings = AcquisitionSettings(
-                num_slices=num_z_slices,
-                step_size_um=step_size,
-                camera_exposure_ms=self._mmc.getExposure(),
-            )
-            configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
+        if not set_camera_for_hardware_trigger(self._mmc, self.hw.camera_a_label):
+            logger.error("Failed to set camera to external trigger mode.")
+            return False
 
-            # Calculate the required galvo amplitude from the z-plan range
-            z_positions = list(self.sequence.z_plan)
-            if len(z_positions) > 1:
-                z_range = max(z_positions) - min(z_positions)
-                galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
-                logger.info(
-                    "Calculated galvo amplitude of %.4f deg for a Z-range of %.2f um.",
-                    galvo_amplitude_deg,
-                    z_range,
-                )
-            else:
-                galvo_amplitude_deg = 0
-                logger.info("Z-plan has fewer than 2 points. Setting galvo amplitude to 0.")
+        settings = AcquisitionSettings(
+            num_slices=params.num_z_slices,
+            step_size_um=self._get_z_step_size(z_plan),
+            camera_exposure_ms=self._mmc.getExposure(),
+        )
+        configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.hw)
 
-            configure_galvo_for_spim_scan(
-                self._mmc,
+        z_positions = list(z_plan)
+        galvo_amplitude_deg = 0.0
+        if len(z_positions) > 1:
+            z_range = max(z_positions) - min(z_positions)
+            galvo_amplitude_deg = z_range / self.hw.slice_calibration_slope_um_per_deg
+            logger.info(
+                "Calculated galvo amplitude: %.4f deg for Z-range of %.2f um.",
                 galvo_amplitude_deg,
-                num_z_slices,
-                num_repeats=num_timepoints,
-                repeat_delay_ms=repeat_delay_ms,
-                hw=self.HW,
+                z_range,
             )
-            logger.info("Hardware configured for full time-series.")
-            # ---------------------------------------------------------
 
-            # ---- SINGLE TRIGGER AND COLLECTION LOOP ----
-            self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images_expected, 0, True)
-            trigger_spim_scan_acquisition(self._mmc, self.HW)
+        configure_galvo_for_spim_scan(
+            self._mmc,
+            galvo_amplitude_deg,
+            params.num_z_slices,
+            num_repeats=params.num_timepoints,
+            repeat_delay_ms=params.repeat_delay_ms,
+            hw=self.hw,
+        )
+        logger.info("Hardware configured successfully.")
+        return True
 
-            # The MDASequence is immutable, so we create a new sequence object
-            # with the axis_order forced to match the hardware's physical
-            # acquisition order (T -> P -> Z -> C).
-            sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
-            events = iter(sequence)
+    def _execute_and_collect(self, params: TimingParams) -> None:
+        """Triggers the hardware sequence and collects incoming frames."""
+        self._mmc.startSequenceAcquisition(self.hw.camera_a_label, params.total_images, 0, True)
+        trigger_spim_scan_acquisition(self._mmc, self.hw)
 
-            for i in range(total_images_expected):
-                if not self._running:
-                    break
-                while self._mmc.getRemainingImageCount() == 0:
-                    if not self._mmc.isSequenceRunning():
-                        raise RuntimeError("Camera sequence stopped unexpectedly.")
-                    time.sleep(0.001)
+        sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
+        events = iter(sequence)
 
-                tagged_img = self._mmc.popNextTaggedImage()
-                event = next(events)
-                meta = frame_metadata(self._mmc, mda_event=event)
-                self.frameReady.emit(tagged_img.pix, event, meta)
-                logger.debug(f"Frame collected: {event.index}")
+        for _ in range(params.total_images):
+            if not self._running:
+                logger.info("Acquisition stopped by user.")
+                break
 
-            logger.info("Hardware-driven time-series complete.")
+            while self._mmc.getRemainingImageCount() == 0:
+                if not self._mmc.isSequenceRunning():
+                    logger.error("Camera sequence stopped unexpectedly.")
+                    return
+                time.sleep(0.001)
 
-        except Exception as _e:
-            logger.error("Error during acquisition", exc_info=True)
-        finally:
-            logger.info("Acquisition sequence finished. Cleaning up.")
-            # Set camera back to internal trigger mode
-            set_property(self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger")
-            logger.info(f"Camera {self.HW.camera_a_label} reverted to Internal Trigger.")
-            set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
-            logger.info("SPIMState reset to Idle.")
-            self._mmc.stopSequenceAcquisition()
-            self._mmc.setAutoShutter(original_autoshutter)
-            self.acquisitionFinished.emit(self.sequence)
-            logger.info("Custom PLogic Z-stack completed.")
+            tagged_img = self._mmc.popNextTaggedImage()
+            event = next(events)
+            # frame_metadata() returns a dict, which is the correct type for our signal.
+            meta = frame_metadata(self._mmc, mda_event=event)
+            self.frameReady.emit(tagged_img.pix, event, meta)
+            logger.debug("Frame collected: %s", event.index)
 
-    def _get_z_step_size(self, z_plan) -> float:
+    def _cleanup_hardware(self) -> None:
+        """Resets hardware to a safe, idle state after acquisition."""
+        logger.info("Cleaning up hardware state...")
+        self._mmc.stopSequenceAcquisition()
+        set_property(self._mmc, self.hw.camera_a_label, "TriggerMode", "Internal Trigger")
+        set_property(self._mmc, self.hw.galvo_a_label, "SPIMState", "Idle")
+        self._mmc.setAutoShutter(self._original_autoshutter)
+        logger.info("Hardware cleanup complete.")
+
+    def _get_z_step_size(self, z_plan: AnyZPlan) -> float:
         """Safely get the Z-step size from any Z-plan object."""
         if isinstance(z_plan, (ZRangeAround, ZAboveBelow)):
             return z_plan.step
-        if z_plan and len(z_plan) > 1:
-            positions = list(z_plan)
-            return abs(positions[1] - positions[0])
+
+        try:
+            z_positions = list(z_plan)
+            if len(z_positions) > 1:
+                return abs(z_positions[1] - z_positions[0])
+        except TypeError:
+            pass  # This z_plan type is not iterable and has no .step.
+
         return 0.0
 
-    def _get_time_interval_s(self, time_plan) -> float:
+    def _get_time_interval_s(self, time_plan: Optional[AnyTimePlan]) -> float:
         """Safely get the time interval in seconds from any TimePlan object."""
         if isinstance(time_plan, TIntervalLoops):
             return time_plan.interval.total_seconds()
