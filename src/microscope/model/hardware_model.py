@@ -62,6 +62,7 @@ class HardwareConstants:
     plogic_camera_cell: int = 0
     plogic_always_on_cell: int = 0
     plogic_bnc3_addr: int = 0
+    plogic_bnc1_addr: int = 0
 
     # --- PLogic Calibration & Timing ---
     pulses_per_ms: float = 0.0

@@ -18,6 +18,7 @@ hardware:
   plogic_laser_on_cell: 10
   plogic_camera_cell: 11
   plogic_always_on_cell: 12
+  plogic_bnc1_addr: 33
   plogic_bnc3_addr: 35
 
   # PLogic Calibration & Timing

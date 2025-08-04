@@ -8,6 +8,8 @@ and the ASI Tiger controller, used by all other hardware-specific modules.
 
 import logging
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Optional
 
 from pymmcore_plus import CMMCorePlus
@@ -20,17 +22,35 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Optional[str]:
+@contextmanager
+def tiger_command_batch(mmc: CMMCorePlus, hw: "HardwareConstants") -> Iterator[None]:
+    """
+    Temporarily disables 'OnlySendSerialCommandOnChange' for a command batch.
+
+    This context manager ensures that the Tiger controller hub will accept
+    repeated serial commands, which is often necessary for programming cards
+    like the PLogic. The original setting is always restored upon exit.
+    """
+    hub_label = hw.tiger_comm_hub_label
+    prop_name = "OnlySendSerialCommandOnChange"
+    original_setting = get_property(mmc, hub_label, prop_name)
+    was_changed = original_setting == "Yes"
+
+    if was_changed:
+        set_property(mmc, hub_label, prop_name, "No")
+    try:
+        yield
+    finally:
+        if was_changed:
+            logger.debug(f"Restoring {hub_label}.{prop_name} to '{original_setting}'.")
+            set_property(mmc, hub_label, prop_name, original_setting)
+
+
+def get_property(
+    mmc: CMMCorePlus, device_label: str, property_name: str
+) -> Optional[str]:
     """
     Safely gets a Micro-Manager device property value.
-
-    Args:
-        mmc: The CMMCorePlus instance.
-        device_label: The label of the device in Micro-Manager.
-        property_name: The name of the property to retrieve.
-
-    Returns:
-        The property value as a string if found, otherwise None.
     """
     if device_label not in mmc.getLoadedDevices():
         logger.warning(f"Device '{device_label}' not loaded; cannot get property.")
@@ -44,24 +64,11 @@ def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Opt
     return val
 
 
-def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value: Any) -> bool:
+def set_property(
+    mmc: CMMCorePlus, device_label: str, property_name: str, value: Any
+) -> bool:
     """
     Sets a Micro-Manager device property, checking for existence and changes.
-
-    This function will only send the set command if the new value is
-    different from the current value. It returns True if the property has the
-    desired value after execution, and False if an error occurred.
-
-    Args:
-        mmc: The CMMCorePlus instance.
-        device_label: Label of the device.
-        property_name: Name of the property.
-        value: Desired value for the property.
-
-    Returns:
-        True if the property is successfully set to the desired value (or was
-        already set). False if the device/property is not found or if the
-        set command fails.
     """
     if device_label not in mmc.getLoadedDevices():
         logger.error(f"Device '{device_label}' not loaded; cannot set property.")
@@ -73,7 +80,7 @@ def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value:
     current_value = mmc.getProperty(device_label, property_name)
     if current_value == str(value):
         logger.debug(f"{device_label}.{property_name} already set to {value}.")
-        return True  # The state is correct, no action needed.
+        return True
 
     try:
         mmc.setProperty(device_label, property_name, value)
@@ -87,14 +94,6 @@ def set_property(mmc: CMMCorePlus, device_label: str, property_name: str, value:
 def send_tiger_command(mmc: CMMCorePlus, cmd: str, hw: "HardwareConstants") -> bool:
     """
     Sends a serial command to the TigerCommHub device.
-
-    Args:
-        mmc: The CMMCorePlus instance.
-        cmd: The serial command string to send.
-        hw: The HardwareConstants object providing the device label.
-
-    Returns:
-        True if the command was sent successfully, False otherwise.
     """
     tiger_label = hw.tiger_comm_hub_label
     if tiger_label not in mmc.getLoadedDevices():
@@ -102,10 +101,8 @@ def send_tiger_command(mmc: CMMCorePlus, cmd: str, hw: "HardwareConstants") -> b
         return False
 
     try:
-        # Use the variable `tiger_label` for the device name.
         mmc.setProperty(tiger_label, "SerialCommand", cmd)
         logger.debug(f"Tiger command sent: {cmd}")
-        # A short pause is often necessary for serial devices to process a command.
         time.sleep(0.01)
         return True
     except Exception as e:
