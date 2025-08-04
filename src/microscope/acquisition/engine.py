@@ -121,6 +121,14 @@ class PLogicMDAEngine(MDAEngine):
         scan_duration_s = (num_z * self._mmc.getExposure()) / 1000.0
         repeat_delay_ms = max(0, (interval_s - scan_duration_s) * 1000.0)
 
+        total_images = len(list(sequence))
+        logger.info(
+            "Starting hardware-timed series: %d images planned (%d timepoints, %d z-slices).",
+            total_images,
+            num_t,
+            num_z,
+        )
+
         self._mmc.setAutoShutter(False)
         if not set_camera_for_hardware_trigger(self._mmc, self.HW.camera_a_label):
             return False
@@ -138,6 +146,11 @@ class PLogicMDAEngine(MDAEngine):
             if len(z_positions) > 1:
                 z_range = max(z_positions) - min(z_positions)
                 galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
+                logger.info(
+                    "Calculated galvo amplitude of %.4f deg for a Z-range of %.2f um.",
+                    galvo_amplitude_deg,
+                    z_range,
+                )
         except TypeError:
             logger.warning("Z-plan is not iterable, cannot calculate galvo amplitude from range.")
 
