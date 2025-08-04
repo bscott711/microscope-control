@@ -4,12 +4,13 @@
 
 hardware:
   # Device labels
+  tiger_comm_hub_label: "TigerCommHub"
   galvo_a_label: "Scanner:AB:33"
   piezo_a_label: "PiezoStage:P:34"
+  plogic_label: "PLogic:E:36"
   camera_a_label: "Camera-1"
   camera_b_label: "Camera-2"
-  plogic_label: "PLogic:E:36"
-  tiger_comm_hub_label: "TigerCommHub"
+
 
   # PLogic Address Constants (Decimal)
   plogic_trigger_ttl_addr: 41

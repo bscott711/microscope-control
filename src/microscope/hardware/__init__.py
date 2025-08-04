@@ -7,8 +7,8 @@ This module exposes a simplified interface to the underlying hardware modules.
 
 # Import Camera functions
 from .camera import (
+    check_and_reset_camera_trigger_modes,
     set_camera_for_hardware_trigger,
-    set_camera_trigger_mode_level_high,
 )
 
 # Import core utilities
@@ -48,7 +48,7 @@ __all__ = [
     "configure_galvo_for_spim_scan",
     "trigger_spim_scan_acquisition",
     # Camera
-    "set_camera_trigger_mode_level_high",
+    "check_and_reset_camera_trigger_modes",
     "set_camera_for_hardware_trigger",
     # Initializer
     "initialize_system_hardware",

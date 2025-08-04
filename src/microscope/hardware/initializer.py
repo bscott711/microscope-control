@@ -8,7 +8,7 @@ import logging
 from pymmcore_plus import CMMCorePlus
 
 from ..model.hardware_model import HardwareConstants
-from .camera import set_camera_trigger_mode_level_high
+from .camera import check_and_reset_camera_trigger_modes
 from .plogic import open_global_shutter
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def initialize_system_hardware(mmc: CMMCorePlus, hw: HardwareConstants) -> None:
     logger.info("Performing one-time system hardware initialization...")
     try:
         open_global_shutter(mmc, hw)
-        set_camera_trigger_mode_level_high(mmc, hw)
+        check_and_reset_camera_trigger_modes(mmc, hw)
         logger.info("System hardware initialization complete.")
     except Exception as e:
         logger.critical("Failed during system hardware initialization: %s", e, exc_info=True)

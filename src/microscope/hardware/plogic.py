@@ -42,8 +42,7 @@ def open_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
 
         # Program a PLogic cell to output a constant HIGH signal
         send_tiger_command(mmc, f"M E={hw.plogic_always_on_cell}", hw)
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=0", hw)
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z=5", hw)
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=0 Z=5", hw)
         send_tiger_command(mmc, f"{plogic_addr_prefix}CCB X=1", hw)
 
         # Route the "always on" cell's output to BNC3
@@ -117,6 +116,7 @@ def configure_plogic_for_dual_nrt_pulses(
     plogic_addr_prefix = plogic_label.split(":")[-1]
     hub_label = hw.tiger_comm_hub_label
     hub_prop = "OnlySendSerialCommandOnChange"
+    routing_str = f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0"
 
     original_setting = get_property(mmc, hub_label, hub_prop)
     logger.info("Configuring PLogic for dual NRT pulses")
@@ -133,25 +133,15 @@ def configure_plogic_for_dual_nrt_pulses(
         logger.debug(f"Programming Camera pulse (cell {hw.plogic_camera_cell})")
         camera_pulse_cycles = int(settings.camera_exposure_ms * hw.pulses_per_ms)
         send_tiger_command(mmc, f"M E={hw.plogic_camera_cell}", hw)
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14", hw)
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={camera_pulse_cycles}", hw)
-        send_tiger_command(
-            mmc,
-            f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0",
-            hw,
-        )
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14 Z={camera_pulse_cycles}", hw)
+        send_tiger_command(mmc, routing_str, hw)
 
         # Step 3: Program Laser Pulse (NRT One-Shot #2)
         logger.debug(f"Programming Laser pulse (cell {hw.plogic_laser_on_cell})")
         laser_pulse_cycles = int(settings.laser_trig_duration_ms * hw.pulses_per_ms)
         send_tiger_command(mmc, f"M E={hw.plogic_laser_on_cell}", hw)
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14", hw)
-        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Z={laser_pulse_cycles}", hw)
-        send_tiger_command(
-            mmc,
-            f"{plogic_addr_prefix}CCB X={hw.plogic_trigger_ttl_addr} Y={hw.plogic_4khz_clock_addr} Z=0",
-            hw,
-        )
+        send_tiger_command(mmc, f"{plogic_addr_prefix}CCA Y=14 Z={laser_pulse_cycles}", hw)
+        send_tiger_command(mmc, routing_str, hw)
 
         # Step 4: Route Camera Trigger Cell Output to BNC1
         logger.debug("Routing Camera Trigger Cell Output to BNC1")
