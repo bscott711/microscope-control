@@ -138,7 +138,7 @@ class AcquisitionWorker(QObject):
 
             # ---- SINGLE TRIGGER AND COLLECTION LOOP ----
             self._mmc.startSequenceAcquisition(self.HW.camera_a_label, total_images_expected, 0, True)
-            trigger_spim_scan_acquisition(self._mmc, self.HW.galvo_a_label, self.HW)
+            trigger_spim_scan_acquisition(self._mmc, self.HW)
 
             # The MDASequence is immutable, so we create a new sequence object
             # with the axis_order forced to match the hardware's physical
