@@ -87,7 +87,6 @@ class AcquisitionWorker(QObject):
                 scan_duration_s,
             )
 
-        # Determine number of cameras to correctly calculate total images expected.
         active_camera = self._mmc.getCameraDevice()
         num_cameras = 1
         if self._mmc.getDeviceLibrary(active_camera) == "Utilities":
@@ -148,12 +147,10 @@ class AcquisitionWorker(QObject):
 
             sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
 
-            # Iterate through the events and collect a burst of images for each.
             for event in sequence:
                 if not self._running:
                     break
 
-                # For each event, we expect a burst of 'num_cameras' images.
                 for i in range(num_cameras):
                     while self._mmc.getRemainingImageCount() == 0:
                         if not self._mmc.isSequenceRunning():
@@ -162,11 +159,10 @@ class AcquisitionWorker(QObject):
 
                     tagged_img = self._mmc.popNextTaggedImage()
 
-                    # The tagged image contains the physical camera name.
-                    # We pass these tags directly to frame_metadata.
                     meta = frame_metadata(self._mmc, mda_event=event, **tagged_img.tags)
                     self.frameReady.emit(tagged_img.pix, event, meta)
-                    logger.debug(f"Frame collected for event: {event.index}, Camera: {meta.get('Camera')}")
+                    # Changed to INFO to provide progress during acquisition
+                    logger.info(f"Frame collected: {event.index}")
 
             logger.info("Hardware-driven time-series complete.")
 
