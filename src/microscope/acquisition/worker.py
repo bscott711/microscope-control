@@ -69,13 +69,10 @@ class AcquisitionWorker(QObject):
         num_z_slices = len(list(self.sequence.z_plan))
         num_timepoints = self.sequence.shape[0]
         interval_s = self._get_time_interval_s(self.sequence.time_plan)
-        # The controller delay is from the end of one scan to the start of the next.
-        # We must subtract the time it takes to acquire one z-stack.
         scan_duration_s = (num_z_slices * self._mmc.getExposure()) / 1000.0
         repeat_delay_s = interval_s - scan_duration_s
         repeat_delay_ms = max(0, repeat_delay_s * 1000.0)
 
-        # Add a warning if no interval is set for a multi-timepoint acquisition
         if num_timepoints > 1 and interval_s <= 0:
             logger.warning(
                 "Acquisition has multiple timepoints but no interval is set. "
@@ -90,16 +87,14 @@ class AcquisitionWorker(QObject):
                 scan_duration_s,
             )
 
-        # PHASE 1 CHANGE: Determine number of cameras
+        # Determine number of cameras to correctly calculate total images expected.
         active_camera = self._mmc.getCameraDevice()
         num_cameras = 1
         if self._mmc.getDeviceLibrary(active_camera) == "Utilities":
-            # This is likely the "Multi Camera" device
             num_cameras = self._mmc.getNumberOfCameraChannels()
             logger.info(f"'Multi Camera' device detected with {num_cameras} channels.")
         else:
             logger.info(f"Single camera acquisition detected for '{active_camera}'.")
-        # END PHASE 1 CHANGE
 
         total_images_expected = num_z_slices * num_timepoints * num_cameras
         logger.info(
@@ -123,7 +118,6 @@ class AcquisitionWorker(QObject):
             )
             configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
 
-            # Calculate the required galvo amplitude from the z-plan range
             z_positions = list(self.sequence.z_plan)
             if len(z_positions) > 1:
                 z_range = max(z_positions) - min(z_positions)
@@ -152,42 +146,34 @@ class AcquisitionWorker(QObject):
             self._mmc.startSequenceAcquisition(active_camera, total_images_expected, 0, True)
             trigger_spim_scan_acquisition(self._mmc, self.HW)
 
-            # The MDASequence is immutable, so we create a new sequence object
-            # with the axis_order forced to match the hardware's physical
-            # acquisition order (T -> P -> Z -> C).
             sequence = self.sequence.model_copy(update={"axis_order": ("t", "p", "z", "c")})
-            events = iter(sequence)
-            current_event = next(events, None)
 
-            images_collected_for_event = 0
-            for i in range(total_images_expected):
+            # Iterate through the events and collect a burst of images for each.
+            for event in sequence:
                 if not self._running:
                     break
-                while self._mmc.getRemainingImageCount() == 0:
-                    if not self._mmc.isSequenceRunning():
-                        raise RuntimeError("Camera sequence stopped unexpectedly.")
-                    time.sleep(0.001)
 
-                tagged_img = self._mmc.popNextTaggedImage()
+                # For each event, we expect a burst of 'num_cameras' images.
+                for i in range(num_cameras):
+                    while self._mmc.getRemainingImageCount() == 0:
+                        if not self._mmc.isSequenceRunning():
+                            raise RuntimeError("Camera sequence stopped unexpectedly.")
+                        time.sleep(0.001)
 
-                if current_event:
-                    event_for_frame = current_event.model_copy(update={"c": images_collected_for_event})
-                    meta = frame_metadata(self._mmc, mda_event=event_for_frame, **tagged_img.tags)
-                    self.frameReady.emit(tagged_img.pix, event_for_frame, meta)
-                    logger.debug(f"Frame collected: {event_for_frame.index}")
+                    tagged_img = self._mmc.popNextTaggedImage()
 
-                    images_collected_for_event += 1
-                    if images_collected_for_event == num_cameras:
-                        current_event = next(events, None)
-                        images_collected_for_event = 0
+                    # The tagged image contains the physical camera name.
+                    # We pass these tags directly to frame_metadata.
+                    meta = frame_metadata(self._mmc, mda_event=event, **tagged_img.tags)
+                    self.frameReady.emit(tagged_img.pix, event, meta)
+                    logger.debug(f"Frame collected for event: {event.index}, Camera: {meta.get('Camera')}")
 
             logger.info("Hardware-driven time-series complete.")
 
-        except Exception as _e:
+        except Exception:
             logger.error("Error during acquisition", exc_info=True)
         finally:
             logger.info("Acquisition sequence finished. Cleaning up.")
-            # Set camera back to internal trigger mode
             reset_cameras_to_internal(self._mmc, active_camera)
             set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
             logger.info("SPIMState reset to Idle.")
