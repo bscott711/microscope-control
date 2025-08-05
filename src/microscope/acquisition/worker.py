@@ -89,9 +89,11 @@ class AcquisitionWorker(QObject):
 
         active_camera = self._mmc.getCameraDevice()
         num_cameras = 1
+        camera_names = [active_camera]
         if self._mmc.getDeviceLibrary(active_camera) == "Utilities":
             num_cameras = self._mmc.getNumberOfCameraChannels()
-            logger.info(f"'Multi Camera' device detected with {num_cameras} channels.")
+            camera_names = [self._mmc.getCameraChannelName(i) for i in range(num_cameras)]
+            logger.info(f"'Multi Camera' device detected with {num_cameras} channels: {camera_names}")
         else:
             logger.info(f"Single camera acquisition detected for '{active_camera}'.")
 
@@ -159,10 +161,16 @@ class AcquisitionWorker(QObject):
 
                     tagged_img = self._mmc.popNextTaggedImage()
 
-                    meta = frame_metadata(self._mmc, mda_event=event, **tagged_img.tags)
-                    self.frameReady.emit(tagged_img.pix, event, meta)
-                    # Changed to INFO to provide progress during acquisition
-                    logger.info(f"Frame collected: {event.index}")
+                    cam_name = tagged_img.tags.get("Camera")
+                    if cam_name and cam_name in camera_names:
+                        c_idx = camera_names.index(str(cam_name))
+                    else:
+                        c_idx = i
+
+                    meta_event = event.model_copy(update={"index": {**event.index, "c": c_idx}})
+                    meta = frame_metadata(self._mmc, mda_event=meta_event, **tagged_img.tags)
+                    self.frameReady.emit(tagged_img.pix, meta_event, meta)
+                    logger.info(f"Frame collected: {meta_event.index}")
 
             logger.info("Hardware-driven time-series complete.")
 

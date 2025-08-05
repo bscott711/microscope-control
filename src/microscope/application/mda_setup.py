@@ -87,12 +87,13 @@ class MultiCameraWriter:
         Route the incoming frame to the correct writer based on camera metadata.
         """
         camera_name = meta.get("Camera")
-        # Changed to INFO to provide progress during acquisition
-        logger.info(f"MultiCameraWriter received frame. Camera from metadata: {camera_name}")
+        logger.info(f"MultiCameraWriter received frame for event {event.index}. Camera from metadata: {camera_name}")
         if camera_name in self._writers:
             self._writers[camera_name].frameReady(frame, event, meta)
         else:
-            logger.warning(f"Received frame from unknown camera: {camera_name}")
+            logger.warning(
+                f"Received frame from unknown camera: {camera_name}. Available writers: {list(self._writers.keys())}"
+            )
 
     def sequenceFinished(self, seq: MDASequence) -> None:
         """
