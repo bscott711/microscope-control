@@ -5,109 +5,139 @@ Responsible for wiring the MDA widget to the custom PLogic MDA engine.
 This isolates the complex MDA setup logic from the main application controller.
 """
 
-import json
 import logging
-from collections import defaultdict
-from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
-import numpy as np
 from pymmcore_plus import CMMCorePlus
-from pymmcore_plus.mda.handlers import (
-    ImageSequenceWriter,
-    OMETiffWriter,
-    OMEZarrWriter,
-)
-from pymmcore_plus.metadata import FrameMetaV1, to_builtins
+from pymmcore_plus.mda.handlers import OMETiffWriter
 from useq import MDAEvent, MDASequence
 
 from microscope.acquisition import PLogicMDAEngine
 from microscope.model.hardware_model import HardwareConstants
 
+# Use TYPE_CHECKING to avoid circular import at runtime
 if TYPE_CHECKING:
+    from pymmcore_plus.mda.handlers import ImageSequenceWriter, OMEZarrWriter
     from pymmcore_widgets.mda import MDAWidget
 
 logger = logging.getLogger(__name__)
 
-TIFF_EXTENSIONS = {".tif", ".tiff", ".ome.tif", ".ome.tiff"}
-ZARR_EXTENSIONS = {".zarr", ".ome.zarr"}
-AnyWriter = OMETiffWriter | OMEZarrWriter | ImageSequenceWriter
-
 
 class OMETiffWriterWithMetadata(OMETiffWriter):
-    """Extends OMETiffWriter to save comprehensive metadata JSON files."""
+    """Extends OMETiffWriter to save metadata JSON files alongside the OME-TIFF."""
 
-    def __init__(self, filename: str) -> None:
+    def __init__(self, filename: str):
         super().__init__(filename)
         self._basename = Path(filename).with_suffix("").name
-        self.frame_metadatas: defaultdict[str, list[FrameMetaV1]] = defaultdict(list)
 
-    def sequenceStarted(self, seq: MDASequence, meta: object = object()) -> None:
+    def sequenceStarted(self, seq: MDASequence, meta: object = object()):
         super().sequenceStarted(seq, meta)
         self._meta_dir = Path(self._filename).parent
         self._meta_dir.mkdir(parents=True, exist_ok=True)
         seq_path = self._meta_dir / f"{self._basename}_useq_MDASequence.json"
         seq_path.write_text(seq.model_dump_json(indent=2))
 
-    # FIX: The `meta` parameter's type hint must match the base class.
-    # At runtime, it's a dict, but the type hint must be FrameMetaV1.
-    def frameReady(self, frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1) -> None:
-        super().frameReady(frame, event, meta)
-        key = str(event.index.get("p", 0))
-        self.frame_metadatas[key].append(meta)
+    def sequenceFinished(self, seq: MDASequence):
+        super().sequenceFinished(seq)
+        if hasattr(self, "frame_metadatas") and self.frame_metadatas:
+            import json
+
+            from pymmcore_plus.metadata import to_builtins
+
+            serializable_meta = {
+                pos_key: [to_builtins(m) for m in metas] for pos_key, metas in self.frame_metadatas.items()
+            }
+            meta_path = self._meta_dir / f"{self._basename}_frame_metadata.json"
+            meta_path.write_text(json.dumps(serializable_meta, indent=2))
+
+
+class MultiCameraWriter:
+    """An MDA handler that saves data from multiple cameras to separate files."""
+
+    def __init__(self, base_path: Path, mmcore: CMMCorePlus):
+        self._base_path = base_path
+        self._mmc = mmcore
+        self._writers: dict[str, OMETiffWriterWithMetadata] = {}
+        self._camera_names: list[str] = []
+
+    def sequenceStarted(self, seq: MDASequence, meta: Any = None) -> None:
+        active_camera = self._mmc.getCameraDevice()
+        if self._mmc.getDeviceLibrary(active_camera) == "Utilities":
+            num_channels = self._mmc.getNumberOfCameraChannels()
+            self._camera_names = [self._mmc.getCameraChannelName(i) for i in range(num_channels)]
+        else:
+            self._camera_names = [active_camera]
+
+        logger.info(f"MultiCameraWriter started for cameras: {self._camera_names}")
+
+        for cam_name in self._camera_names:
+            p = self._base_path
+            cam_path = p.with_name(f"{p.stem}_{cam_name}{p.suffix}")
+            self._writers[cam_name] = OMETiffWriterWithMetadata(str(cam_path))
+            self._writers[cam_name].sequenceStarted(seq, meta)
+
+    def frameReady(self, frame: Any, event: MDAEvent, meta: Any = None) -> None:
+        camera_name = meta.get("Camera")
+        # Change logging to debug level to reduce console noise
+        logger.debug(
+            f"MultiCameraWriter received frame for event {event.index}. Camera: {camera_name}. Full metadata: {meta}"
+        )
+        if camera_name in self._writers:
+            self._writers[camera_name].frameReady(frame, event, meta)
+        else:
+            logger.warning(f"Received frame from unknown camera: {camera_name}")
 
     def sequenceFinished(self, seq: MDASequence) -> None:
-        super().sequenceFinished(seq)
-        if not self.frame_metadatas:
-            return
-        serializable_meta = {
-            pos_key: [to_builtins(m) for m in metas] for pos_key, metas in self.frame_metadatas.items()
-        }
-        meta_path = self._meta_dir / f"{self._basename}_frame_metadata.json"
-        meta_path.write_text(json.dumps(serializable_meta, indent=2))
-
-
-def _create_mda_handler(save_info: Mapping[str, Any]) -> Optional[AnyWriter]:
-    """Creates a file writer based on the save_info from the MDA widget."""
-    if not save_info.get("should_save"):
-        return None
-
-    save_path = Path(str(save_info["save_dir"])) / str(save_info["save_name"])
-    ext = save_path.suffix.lower()
-
-    if ext in ZARR_EXTENSIONS:
-        return OMEZarrWriter(str(save_path), overwrite=True)
-    if ext in TIFF_EXTENSIONS:
-        return OMETiffWriterWithMetadata(str(save_path))
-
-    return ImageSequenceWriter(str(save_path))
+        for writer in self._writers.values():
+            writer.sequenceFinished(seq)
+        logger.info("MultiCameraWriter finished.")
 
 
 def setup_mda_widget(
-    mda_widget: "MDAWidget",
+    mda_widget: "MDAWidget",  # Type hint for the MDA widget
     mmc: CMMCorePlus,
     hw: HardwareConstants,
-    save_handler: Optional[AnyWriter] = None,
-) -> PLogicMDAEngine:
+    save_handler: Optional[Union[OMETiffWriter, "OMEZarrWriter", "ImageSequenceWriter"]] = None,
+):
     """
     Wires the MDA widget to use the CustomPLogicMDAEngine.
+    Args:
+        mda_widget: The MDA widget from pymmcore-gui
+        mmc: Core instance
+        hw: HardwareConstants instance
+        save_handler: Optional pre-configured save handler
     """
     engine = PLogicMDAEngine(mmc, hw)
     mmc.register_mda_engine(engine)
     logger.info("Custom PLogic MDA Engine registered.")
 
-    def mda_runner(output: Optional[Any] = None) -> None:
+    def mda_runner(output=None):
+        # Type-safe access to the widget's value
         sequence: MDASequence = mda_widget.value()
         save_info = mda_widget.save_info.value()
-        handler = save_handler or _create_mda_handler(save_info)
 
+        handler = save_handler
+        if not handler and save_info["should_save"]:
+            save_path = Path(save_info["save_dir"]) / save_info["save_name"]
+
+            # PHASE 1 CHANGE: Use MultiCameraWriter for OME-TIFF
+            if save_path.suffix.lower() in {".tif", ".tiff", ".ome.tif", ".ome.tiff"}:
+                handler = MultiCameraWriter(save_path, mmc)
+            else:
+                # Fallback for other formats if needed in the future
+                logger.warning(f"Unsupported save format for multi-camera: {save_path.suffix}. Using default writer.")
+                handler = OMETiffWriterWithMetadata(str(save_path))
+            # END PHASE 1 CHANGE
+
+        # Connect handler to MDA events
         if handler:
             mmc.mda.events.sequenceStarted.connect(handler.sequenceStarted)
             mmc.mda.events.frameReady.connect(handler.frameReady)
             mmc.mda.events.sequenceFinished.connect(handler.sequenceFinished)
 
-            def _disconnect() -> None:
+            # Disconnect after finished
+            def _disconnect():
                 mmc.mda.events.sequenceStarted.disconnect(handler.sequenceStarted)
                 mmc.mda.events.frameReady.disconnect(handler.frameReady)
                 mmc.mda.events.sequenceFinished.disconnect(handler.sequenceFinished)
@@ -117,10 +147,9 @@ def setup_mda_widget(
 
         engine.run(sequence)
 
+    # Safe assignment with attribute check
     if hasattr(mda_widget, "execute_mda"):
         mda_widget.execute_mda = mda_runner
-        logger.info("MDA 'Run' button wired to use CustomPLogicMDAEngine.")
+        logger.info("MDA 'Run' button has been wired to use CustomPLogicMDAEngine.")
     else:
         logger.error("MDA widget does not have 'execute_mda' attribute.")
-
-    return engine

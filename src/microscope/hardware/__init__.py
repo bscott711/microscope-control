@@ -8,6 +8,7 @@ This module exposes a simplified interface to the underlying hardware modules.
 # Import Camera functions
 from .camera import (
     check_and_reset_camera_trigger_modes,
+    reset_cameras_to_internal,
     set_camera_for_hardware_trigger,
 )
 
@@ -50,6 +51,7 @@ __all__ = [
     # Camera
     "check_and_reset_camera_trigger_modes",
     "set_camera_for_hardware_trigger",
+    "reset_cameras_to_internal",
     # Initializer
     "initialize_system_hardware",
 ]

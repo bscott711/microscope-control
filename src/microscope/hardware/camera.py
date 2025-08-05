@@ -62,26 +62,62 @@ def set_camera_for_hardware_trigger(
     """
     Sets a camera to a suitable external trigger mode for an acquisition.
 
-    It iterates through a list of preferred modes and sets the first one
-    that the camera supports.
+    If 'Multi Camera' is provided, it configures all physical cameras assigned to it.
 
     Args:
         mmc: The CMMCorePlus instance.
-        camera_label: Label of the camera to configure.
+        camera_label: Label of the camera to configure (can be 'Multi Camera').
         preferred_modes: An ordered tuple of trigger modes to try.
 
     Returns:
-        True if a suitable mode was successfully set, False otherwise.
+        True if a suitable mode was successfully set for all cameras, False otherwise.
     """
-    logger.info(f"Configuring {camera_label} for hardware-timed acquisition.")
-    for mode in preferred_modes:
-        if _set_camera_trigger_mode(mmc, camera_label, mode):
-            return True
+    logger.info(f"Configuring '{camera_label}' for hardware-timed acquisition.")
 
-    logger.error(
-        f"Could not set a suitable trigger mode for {camera_label} from {preferred_modes}.",
-    )
-    return False
+    cameras_to_configure = []
+    if mmc.getDeviceLibrary(camera_label) == "Utilities":
+        num_channels = mmc.getNumberOfCameraChannels()
+        cameras_to_configure = [mmc.getCameraChannelName(i) for i in range(num_channels)]
+        logger.info(f"Multi Camera device detected. Configuring: {cameras_to_configure}")
+    else:
+        cameras_to_configure = [camera_label]
+
+    all_successful = True
+    for cam in cameras_to_configure:
+        was_set = False
+        for mode in preferred_modes:
+            if _set_camera_trigger_mode(mmc, cam, mode):
+                was_set = True
+                break
+        if not was_set:
+            logger.error(f"Could not set a suitable trigger mode for {cam} from {preferred_modes}.")
+            all_successful = False
+
+    return all_successful
+
+
+def reset_cameras_to_internal(mmc: CMMCorePlus, camera_label: str) -> None:
+    """
+    Resets the trigger mode of the specified camera(s) to 'Internal Trigger'.
+
+    If 'Multi Camera' is provided, it resets all physical cameras assigned to it.
+
+    Args:
+        mmc: The CMMCorePlus instance.
+        camera_label: The device label of the camera(s) to reset.
+    """
+    cameras_to_reset = []
+    if mmc.getDeviceLibrary(camera_label) == "Utilities":
+        num_channels = mmc.getNumberOfCameraChannels()
+        cameras_to_reset = [mmc.getCameraChannelName(i) for i in range(num_channels)]
+    else:
+        cameras_to_reset = [camera_label]
+
+    for cam in cameras_to_reset:
+        if not _set_camera_trigger_mode(mmc, cam, "Internal Trigger"):
+            logger.error(f"Failed to reset camera '{cam}' to 'Internal Trigger'.")
+        else:
+            logger.info(f"Camera {cam} reverted to Internal Trigger.")
 
 
 def check_and_reset_camera_trigger_modes(
@@ -92,10 +128,6 @@ def check_and_reset_camera_trigger_modes(
 ) -> dict[str, bool]:
     """
     Verifies cameras can use an external trigger, then reverts to a safe state.
-
-    For each camera, this function attempts to set it to an external trigger
-    mode and then immediately reverts it to a reset mode (e.g., 'Internal').
-    This is useful for verifying hardware compatibility before an experiment.
 
     Args:
         mmc: The CMMCorePlus instance.
@@ -111,10 +143,8 @@ def check_and_reset_camera_trigger_modes(
     camera_labels = [hw.camera_a_label, hw.camera_b_label]
 
     for camera_label in camera_labels:
-        # Attempt to set one of the specified external modes
         was_set = False
         for mode in external_modes:
-            # We only need to find one that works for the test
             if _set_camera_trigger_mode(mmc, camera_label, mode):
                 was_set = True
                 break
@@ -124,7 +154,6 @@ def check_and_reset_camera_trigger_modes(
             results[camera_label] = False
             continue
 
-        # If setting an external mode worked, revert to the safe/reset mode
         if _set_camera_trigger_mode(mmc, camera_label, reset_mode):
             logger.info(f"Successfully tested and reset {camera_label}.")
             results[camera_label] = True
