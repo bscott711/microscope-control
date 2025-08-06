@@ -10,7 +10,7 @@ import logging
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from pymmcore_plus import CMMCorePlus
 
@@ -46,7 +46,7 @@ def tiger_command_batch(mmc: CMMCorePlus, hw: "HardwareConstants") -> Iterator[N
             set_property(mmc, hub_label, prop_name, original_setting)
 
 
-def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> Optional[str]:
+def get_property(mmc: CMMCorePlus, device_label: str, property_name: str) -> str | None:
     """
     Safely gets a Micro-Manager device property value.
     """

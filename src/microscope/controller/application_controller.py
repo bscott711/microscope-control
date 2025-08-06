@@ -9,7 +9,7 @@ view, model, hardware drivers, and event interceptors.
 
 import logging
 from functools import partial
-from typing import Any, Optional
+from typing import Any
 
 from pymmcore_plus import CMMCorePlus
 
@@ -42,7 +42,7 @@ class ApplicationController:
         self.model = hw_constants
         self.view = MainView()
         self.interceptor = ActionInterceptor(self.mmc, self.model)
-        self.engine: Optional[PLogicMDAEngine] = None
+        self.engine: PLogicMDAEngine | None = None
         self._setup_application()
 
     def run(self) -> int:

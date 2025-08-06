@@ -5,7 +5,6 @@ Manages the acquisition lifecycle, frame buffering, and scrubbing.
 """
 
 import logging
-from typing import Optional
 
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
@@ -41,10 +40,10 @@ class PLogicMDAEngine(MDAEngine):
         super().__init__(mmc)
         self._mmc = mmc
         self.HW = hw_constants
-        self._worker: Optional[AcquisitionWorker] = None
-        self._thread: Optional[QThread] = None
+        self._worker: AcquisitionWorker | None = None
+        self._thread: QThread | None = None
         self._frame_buffer: dict = {}
-        self._sequence: Optional[MDASequence] = None
+        self._sequence: MDASequence | None = None
         self._original_autoshutter: bool = False
 
     def run(self, sequence: MDASequence) -> None:
@@ -212,7 +211,7 @@ class PLogicMDAEngine(MDAEngine):
 
     def _get_z_step_size(self, z_plan: AnyZPlan) -> float:
         """Safely get the Z-step size from any Z-plan object."""
-        if isinstance(z_plan, (ZRangeAround, ZAboveBelow)):
+        if isinstance(z_plan, ZRangeAround | ZAboveBelow):
             return z_plan.step
         try:
             z_positions = list(z_plan)
@@ -222,7 +221,7 @@ class PLogicMDAEngine(MDAEngine):
             pass
         return 0.0
 
-    def _get_time_interval_s(self, time_plan: Optional[AnyTimePlan]) -> float:
+    def _get_time_interval_s(self, time_plan: AnyTimePlan | None) -> float:
         """Safely get the time interval in seconds from any TimePlan object."""
         if isinstance(time_plan, TIntervalLoops):
             return time_plan.interval.total_seconds()

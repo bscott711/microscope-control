@@ -108,3 +108,6 @@ tmp/
 
 # Generated tifs
 snapped_images/
+
+# Test Scripts
+test_scripts/

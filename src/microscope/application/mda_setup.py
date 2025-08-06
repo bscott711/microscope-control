@@ -10,7 +10,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from pymmcore_plus import CMMCorePlus
@@ -68,7 +68,7 @@ class OMETiffWriterWithMetadata(OMETiffWriter):
         meta_path.write_text(json.dumps(serializable_meta, indent=2))
 
 
-def _create_mda_handler(save_info: Mapping[str, Any]) -> Optional[AnyWriter]:
+def _create_mda_handler(save_info: Mapping[str, Any]) -> AnyWriter | None:
     """Creates a file writer based on the save_info from the MDA widget."""
     if not save_info.get("should_save"):
         return None
@@ -88,7 +88,7 @@ def setup_mda_widget(
     mda_widget: "MDAWidget",
     mmc: CMMCorePlus,
     hw: HardwareConstants,
-    save_handler: Optional[AnyWriter] = None,
+    save_handler: AnyWriter | None = None,
 ) -> PLogicMDAEngine:
     """
     Wires the MDA widget to use the CustomPLogicMDAEngine.
@@ -97,7 +97,7 @@ def setup_mda_widget(
     mmc.register_mda_engine(engine)
     logger.info("Custom PLogic MDA Engine registered.")
 
-    def mda_runner(output: Optional[Any] = None) -> None:
+    def mda_runner(output: Any | None = None) -> None:
         sequence: MDASequence = mda_widget.value()
         save_info = mda_widget.save_info.value()
         handler = save_handler or _create_mda_handler(save_info)

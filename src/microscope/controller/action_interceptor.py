@@ -10,8 +10,8 @@ decoupling the hardware control from the user interface logic.
 """
 
 import logging
+from collections.abc import Callable
 from functools import wraps
-from typing import Callable, Optional
 
 from pymmcore_gui.actions import core_actions
 from pymmcore_plus import CMMCorePlus
@@ -39,8 +39,8 @@ class ActionInterceptor:
     def __init__(self, mmc: CMMCorePlus, model: HardwareConstants) -> None:
         self.mmc = mmc
         self.model = model
-        self._original_snap_func: Optional[Callable] = None
-        self._original_live_func: Optional[Callable] = None
+        self._original_snap_func: Callable | None = None
+        self._original_live_func: Callable | None = None
 
     def wrap_snap_action(self) -> None:
         """

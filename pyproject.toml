@@ -7,11 +7,11 @@ build-backend = "hatchling.build"
 # --- Core Project Metadata ---
 [project]
 name = "microscope-control"
-version = "0.2.1"
+version = "0.2.1.dev0"
 description = "OPM Control System"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
   { name = "Brandon Scott", email = "brandon.scott@sdsmt.edu" },
 ]
@@ -66,7 +66,7 @@ allow-direct-references = true
 
 [tool.ruff]
 # Set the minimum Python version to target for linting.
-target-version = "py39"
+target-version = "py310"
 exclude = [
     "initial_testing_scripts",
     "docs",

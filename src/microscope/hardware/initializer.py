@@ -4,7 +4,7 @@ Performs one-time system hardware initialization at application startup.
 """
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from pymmcore_plus import CMMCorePlus
 
