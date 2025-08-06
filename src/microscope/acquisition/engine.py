@@ -105,17 +105,23 @@ class PLogicMDAEngine(MDAEngine):
 
     def _setup_hardware(self, sequence: MDASequence) -> bool:
         """Configure all hardware for the sequence. Runs in the main thread."""
-        z_plan = sequence.z_plan
-        if not z_plan:
-            logger.error("PLogic acquisition requires a Z-plan.")
-            return False
-
         try:
             num_z = sequence.shape[sequence.axis_order.index("z")]
+        except ValueError:
+            logger.error("Sequence must have a 'z' axis for PLogic acquisition.")
+            return False
+
+        z_plan = sequence.z_plan
+        if not z_plan:
+            logger.error("PLogic acquisition requires a Z-plan, but it is missing.")
+            return False
+
+        # A T-plan is optional; if not present, we default to a single time point.
+        try:
             num_t = sequence.shape[sequence.axis_order.index("t")]
         except ValueError:
-            logger.error("Sequence must have 't' and 'z' axes for PLogic acquisition.")
-            return False
+            logger.info("No 't' axis found in sequence, defaulting to a single timepoint.")
+            num_t = 1
 
         # Get exposure from the MDA sequence; fall back to the core setting if not specified.
         exposure_ms = self._mmc.getExposure()
