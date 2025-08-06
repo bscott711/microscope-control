@@ -1,0 +1,21 @@
+axis_order:
+- t
+- z
+- c
+channels:
+- config: AllLasers
+  exposure: 10.0
+  group: Lasers
+metadata:
+  pymmcore_widgets:
+    format: ome-tiff
+    save_dir: S:/TEMP_CAMERA_STREAMING/vibe_control
+    save_name: next.ome.tif
+    should_save: true
+    version: 0.10.0
+time_plan:
+  interval: 5.0
+  loops: 2
+z_plan:
+  range: 30.0
+  step: 10.0

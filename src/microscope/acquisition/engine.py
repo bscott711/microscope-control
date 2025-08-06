@@ -29,7 +29,7 @@ from microscope.hardware import (
     set_property,
     trigger_spim_scan_acquisition,
 )
-from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
+from microscope.model.hardware_model import HardwareConstants
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +117,14 @@ class PLogicMDAEngine(MDAEngine):
             logger.error("Sequence must have 't' and 'z' axes for PLogic acquisition.")
             return False
 
+        # Get exposure from the MDA sequence; fall back to the core setting if not specified.
+        exposure_ms = self._mmc.getExposure()
+        if sequence.channels and sequence.channels[0].exposure is not None:
+            exposure_ms = sequence.channels[0].exposure
+            logger.info(f"Using exposure from MDA sequence: {exposure_ms} ms")
+
         interval_s = self._get_time_interval_s(sequence.time_plan)
-        scan_duration_s = (num_z * self._mmc.getExposure()) / 1000.0
+        scan_duration_s = (num_z * exposure_ms) / 1000.0
         repeat_delay_ms = max(0, (interval_s - scan_duration_s) * 1000.0)
 
         total_images = len(list(sequence))
@@ -133,22 +139,26 @@ class PLogicMDAEngine(MDAEngine):
         if not set_camera_for_hardware_trigger(self._mmc, self.HW.camera_a_label):
             return False
 
-        settings = AcquisitionSettings(
-            num_slices=num_z,
-            step_size_um=self._get_z_step_size(z_plan),
-            camera_exposure_ms=self._mmc.getExposure(),
-        )
+        # Update the existing AcquisitionSettings object from the hardware model
+        # with values from the current MDA sequence.
+        settings = self.HW.acquisition
+        settings.num_slices = num_z
+        settings.step_size_um = self._get_z_step_size(z_plan)
+        settings.camera_exposure_ms = exposure_ms
+        settings.laser_trig_duration_ms = exposure_ms  # Ensure laser pulse matches camera
+
         configure_plogic_for_dual_nrt_pulses(self._mmc, settings, self.HW)
 
-        galvo_amplitude_deg = 0.0
+        # Calculate galvo amplitude and update the settings object.
+        # The default is loaded from the config file.
         try:
             z_positions = list(z_plan)
             if len(z_positions) > 1:
                 z_range = max(z_positions) - min(z_positions)
-                galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
+                settings.galvo_amplitude_deg = z_range / self.HW.slice_calibration_slope_um_per_deg
                 logger.info(
                     "Calculated galvo amplitude of %.4f deg for a Z-range of %.2f um.",
-                    galvo_amplitude_deg,
+                    settings.galvo_amplitude_deg,
                     z_range,
                 )
         except TypeError:
@@ -156,8 +166,7 @@ class PLogicMDAEngine(MDAEngine):
 
         configure_galvo_for_spim_scan(
             self._mmc,
-            galvo_amplitude_deg,
-            num_z,
+            settings,
             num_repeats=num_t,
             repeat_delay_ms=repeat_delay_ms,
             hw=self.HW,

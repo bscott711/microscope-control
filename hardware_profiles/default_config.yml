@@ -1,6 +1,5 @@
 # default_config.yml
 # Default configuration for the OPM Control System
-# Using the exact values from the original hardware_model.py
 
 hardware:
   # Device labels
@@ -10,7 +9,6 @@ hardware:
   plogic_label: "PLogic:E:36"
   camera_a_label: "Camera-1"
   camera_b_label: "Camera-2"
-
 
   # PLogic Address Constants (Decimal)
   plogic_trigger_ttl_addr: 41
@@ -26,15 +24,24 @@ hardware:
   plogic_laser_preset_num: 30
   slice_calibration_slope_um_per_deg: 100.0
 
-  # PLogic Presets for Live/Snap (NEW)
+  # PLogic Presets for Live/Snap
   plogic_live_mode_preset: 12
   plogic_idle_mode_preset: 10
 
-  # Galvo/SPIM Timing
-  line_scans_per_slice: 1
-  delay_before_scan_ms: 0.0
-  line_scan_duration_ms: 1.0
-  delay_before_side_ms: 0.0
+  # Galvo/SPIM Static Settings
+  galvo_static_params:
+    BeamEnabled: "Yes"
+    SPIMAlternateDirectionsEnable: "No"
+    SPIMInterleaveSidesEnable: "No"
+    SPIMPiezoHomeDisable: "No"
+    SPIMNumSides: 1
+    SPIMFirstSide: "A"
+    "SingleAxisXAmplitude(deg)": 0.0
+    "SingleAxisXOffset(deg)": 0.0
+    "SingleAxisYOffset(deg)": 0.0
+    SPIMNumSlicesPerPiezo: 1
+    "SPIMDelayBeforeSide(ms)": 0.0
+    "SPIMScanDuration(ms)": 1.0
 
 # Default acquisition settings
 acquisition:
@@ -42,3 +49,4 @@ acquisition:
   step_size_um: 1.0
   laser_trig_duration_ms: 10.0
   camera_exposure_ms: 10.0
+  galvo_amplitude_deg: 0.0

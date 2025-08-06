@@ -8,6 +8,7 @@ This module loads hardware constants from a YAML configuration file.
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -26,12 +27,14 @@ class AcquisitionSettings:
         step_size_um: Step size between slices (in microns)
         laser_trig_duration_ms: Duration of laser trigger pulse (ms)
         camera_exposure_ms: Camera exposure time (ms)
+        galvo_amplitude_deg: Scanning amplitude of the galvo in degrees.
     """
 
-    num_slices: int = 3
-    step_size_um: float = 1.0
-    laser_trig_duration_ms: float = 10.0
-    camera_exposure_ms: float = 10.0
+    num_slices: int
+    step_size_um: float
+    laser_trig_duration_ms: float
+    camera_exposure_ms: float
+    galvo_amplitude_deg: float
 
 
 @dataclass
@@ -73,11 +76,8 @@ class HardwareConstants:
     plogic_live_mode_preset: int = 0
     plogic_idle_mode_preset: int = 0
 
-    # --- Galvo/SPIM Timing ---
-    line_scans_per_slice: int = 0
-    delay_before_scan_ms: float = 0.0
-    line_scan_duration_ms: float = 0.0
-    delay_before_side_ms: float = 0.0
+    # --- Galvo/SPIM Static Settings ---
+    galvo_static_params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Load configuration from the YAML file after initialization."""

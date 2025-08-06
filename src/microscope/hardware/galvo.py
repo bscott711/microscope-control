@@ -10,7 +10,7 @@ import logging
 
 from pymmcore_plus import CMMCorePlus
 
-from microscope.model.hardware_model import HardwareConstants
+from microscope.model.hardware_model import AcquisitionSettings, HardwareConstants
 
 from .core import get_property, set_property
 
@@ -20,8 +20,7 @@ logger = logging.getLogger(__name__)
 
 def configure_galvo_for_spim_scan(
     mmc: CMMCorePlus,
-    galvo_amplitude_deg: float,
-    num_slices: int,
+    settings: AcquisitionSettings,
     num_repeats: int,
     repeat_delay_ms: float,
     hw: HardwareConstants,
@@ -31,8 +30,7 @@ def configure_galvo_for_spim_scan(
 
     Args:
         mmc: The CMMCorePlus instance.
-        galvo_amplitude_deg: The scanning amplitude in degrees.
-        num_slices: The number of slices to scan in a volume.
+        settings: The acquisition settings object containing galvo amplitude and slices.
         num_repeats: The number of times to repeat the volume scan (for time-series).
         repeat_delay_ms: The delay in milliseconds between volume repeats.
         hw: The hardware constants object.
@@ -43,26 +41,18 @@ def configure_galvo_for_spim_scan(
     galvo_label = hw.galvo_a_label
     logger.info(f"Configuring {galvo_label} for SPIM scan...")
 
-    # Define all parameters as a dictionary for clarity and easy modification.
-    # The `set_property` helper handles converting values to strings.
-    params = {
-        "BeamEnabled": "Yes",
-        "SPIMAlternateDirectionsEnable": "No",
-        "SPIMInterleaveSidesEnable": "No",
-        "SPIMPiezoHomeDisable": "No",
-        "SPIMNumSides": 1,
-        "SPIMFirstSide": "A",
-        "SingleAxisXAmplitude(deg)": 0,
-        "SingleAxisXOffset(deg)": 0,
-        "SingleAxisYOffset(deg)": 0,
-        "SPIMNumSlicesPerPiezo": hw.line_scans_per_slice,
-        "SPIMDelayBeforeSide(ms)": hw.delay_before_side_ms,
-        "SPIMScanDuration(ms)": hw.line_scan_duration_ms,
-        "SPIMNumRepeats": num_repeats,
-        "SPIMDelayBeforeRepeat(ms)": repeat_delay_ms,
-        "SingleAxisYAmplitude(deg)": galvo_amplitude_deg,
-        "SPIMNumSlices": num_slices,
-    }
+    # Start with the static parameters loaded from the config file.
+    params = hw.galvo_static_params.copy()
+
+    # Add dynamic and timing parameters.
+    params.update(
+        {
+            "SPIMNumRepeats": num_repeats,
+            "SPIMDelayBeforeRepeat(ms)": repeat_delay_ms,
+            "SingleAxisYAmplitude(deg)": settings.galvo_amplitude_deg,
+            "SPIMNumSlices": settings.num_slices,
+        }
+    )
 
     # Atomically apply all properties; fail if any single one fails.
     for prop, value in params.items():
