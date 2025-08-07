@@ -1,22 +1,13 @@
-# src/microscope/controller/action_interceptor.py
 """
 Intercepts and wraps core GUI actions with custom hardware logic.
-
-This module provides a dedicated class to "monkey-patch" core GUI actions
-from pymmcore-gui, such as snapping an image or toggling live view. This
-allows for the injection of hardware-specific commands (e.g., enabling a
-laser or beam path) without modifying the core GUI library, effectively
-decoupling the hardware control from the user interface logic.
 """
 
 import logging
-from collections.abc import Callable
-from functools import wraps
 
 from pymmcore_gui.actions import core_actions
 from pymmcore_plus import CMMCorePlus
 
-from microscope.hardware import disable_live_laser, enable_live_laser, set_property
+from microscope.hardware import disable_live_laser, enable_live_laser
 from microscope.model.hardware_model import HardwareConstants
 
 logger = logging.getLogger(__name__)
@@ -24,92 +15,67 @@ logger = logging.getLogger(__name__)
 
 class ActionInterceptor:
     """
-    A class that wraps core GUI actions with hardware control logic.
-
-    This isolates the patching of GUI actions from the main application
-    controller, making the logic easier to manage and test. It ensures that
-    original actions can be restored, preventing memory leaks or unintended
-    behavior on application shutdown.
-
-    Attributes:
-        mmc: The CMMCorePlus instance for hardware communication.
-        model: The hardware constants data model.
+    Holds custom hardware-aware functions and handles overriding the default
+    pymmcore-gui actions.
     """
 
     def __init__(self, mmc: CMMCorePlus, model: HardwareConstants) -> None:
         self.mmc = mmc
         self.model = model
-        self._original_snap_func: Callable | None = None
-        self._original_live_func: Callable | None = None
-
-    def wrap_snap_action(self) -> None:
-        """
-        Wrap the core snap action to control the laser and beam.
-
-        This method enables the laser and beam before the snap and ensures
-        they are disabled afterward by connecting to the `imageSnapped` signal.
-        """
+        # Store the original functions so we can restore them on exit.
         self._original_snap_func = core_actions.snap_action.on_triggered
-        if not callable(self._original_snap_func):
-            logger.warning("Could not find original snap function to wrap.")
-            return
+        self._original_live_func = core_actions.toggle_live_action.on_triggered
+
+    def override_actions(self) -> None:
+        """Replace the default on_triggered callables with our custom ones."""
+        core_actions.snap_action.on_triggered = self._custom_snap_func
+        core_actions.toggle_live_action.on_triggered = self._custom_live_func
+        logger.info("Snap and Live actions overridden with custom functions.")
+
+    def _custom_snap_func(self, *args, **kwargs) -> None:
+        """
+        Hardware-aware snap function using an event-based cleanup to prevent
+        race conditions.
+        """
+        logger.info("Custom snap function triggered.")
 
         def snap_cleanup() -> None:
-            """Disable laser and disconnect self after snap is complete."""
+            """A one-shot callback to turn off the laser after snap."""
+            logger.debug("Snap cleanup: Disabling laser.")
             disable_live_laser(self.mmc, self.model)
-            self.mmc.events.imageSnapped.disconnect(snap_cleanup)
-            logger.debug("Snap cleanup complete: Laser disabled.")
+            # Disconnect self to ensure this is a one-shot callback
+            try:
+                self.mmc.events.imageSnapped.disconnect(snap_cleanup)
+                logger.debug("Snap cleanup callback disconnected.")
+            except (TypeError, RuntimeError):
+                pass  # May already be disconnected
 
-        @wraps(self._original_snap_func)
-        def snap_with_laser(*args, **kwargs) -> None:
-            """Enable laser, trigger snap, and schedule cleanup."""
-            logger.info("Snap action triggered, enabling laser.")
-            set_property(self.mmc, self.model.galvo_a_label, "BeamEnabled", "Yes")
+        if self.mmc.isSequenceRunning():
+            self.mmc.stopSequenceAcquisition()
+
+        # Turn hardware ON
+        enable_live_laser(self.mmc, self.model)
+
+        # Connect the cleanup function to run once the snap is complete.
+        self.mmc.events.imageSnapped.connect(snap_cleanup)
+        # Call the original snap function
+        if callable(self._original_snap_func):
+            self._original_snap_func(*args, **kwargs)
+
+    def _custom_live_func(self, *args, **kwargs) -> None:
+        """Hardware-aware function for the live action."""
+        logger.info("Custom live function triggered.")
+        if not self.mmc.isSequenceRunning():
+            logger.info("Starting live mode, enabling laser.")
             enable_live_laser(self.mmc, self.model)
-            self.mmc.events.imageSnapped.connect(snap_cleanup)
-
-            # We can now safely ignore this type error, as we've confirmed
-            # it is callable and have stored the original.
-            self._original_snap_func(*args, **kwargs)  # type: ignore
-
-        core_actions.snap_action.on_triggered = snap_with_laser
-        logger.info("Snap action wrapped for hardware control.")
-
-    def wrap_toggle_live_action(self) -> None:
-        """Wrap the core toggle live action to control the laser and beam."""
-        self._original_live_func = core_actions.toggle_live_action.on_triggered
-        if not callable(self._original_live_func):
-            logger.warning("Could not find original live function to wrap.")
-            return
-
-        @wraps(self._original_live_func)
-        def toggle_live_with_laser(*args, **kwargs) -> None:
-            """
-            Enable/disable laser in sync with live mode.
-
-            The order of operations is important:
-            - When stopping: stop live first, then disable laser.
-            - When starting: enable laser first, then start live.
-            """
-            # If a sequence is running, the user is about to stop it.
-            if self.mmc.isSequenceRunning():
-                logger.info("Stopping live mode, disabling laser.")
-                self._original_live_func(*args, **kwargs)  # type: ignore
-                disable_live_laser(self.mmc, self.model)
-            else:
-                logger.info("Starting live mode, enabling laser.")
-                set_property(self.mmc, self.model.galvo_a_label, "BeamEnabled", "Yes")
-                enable_live_laser(self.mmc, self.model)
-                self._original_live_func(*args, **kwargs)  # type: ignore
-
-        core_actions.toggle_live_action.on_triggered = toggle_live_with_laser
-        logger.info("Live action wrapped for hardware control.")
+            self.mmc.startContinuousSequenceAcquisition(0)
+        else:
+            logger.info("Stopping live mode, disabling laser.")
+            self.mmc.stopSequenceAcquisition()
+            disable_live_laser(self.mmc, self.model)
 
     def restore_actions(self) -> None:
         """Restore the original, unwrapped actions on application exit."""
-        if callable(self._original_snap_func):
-            core_actions.snap_action.on_triggered = self._original_snap_func
-            logger.info("Original snap action restored.")
-        if callable(self._original_live_func):
-            core_actions.toggle_live_action.on_triggered = self._original_live_func
-            logger.info("Original live action restored.")
+        core_actions.snap_action.on_triggered = self._original_snap_func
+        core_actions.toggle_live_action.on_triggered = self._original_live_func
+        logger.info("Original snap/live functions have been restored.")

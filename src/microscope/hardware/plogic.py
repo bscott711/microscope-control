@@ -109,7 +109,7 @@ def enable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
     cmd = f"{plogic_addr_prefix}CCA X={hw.plogic_live_mode_preset}"
-    logger.info("Enabling laser for live/snap mode.")
+    logger.info("Enabling laser for live/snap mode")
     return send_tiger_command(mmc, cmd, hw)
 
 

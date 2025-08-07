@@ -11,13 +11,24 @@ from microscope.controller.application_controller import ApplicationController
 from microscope.model.hardware_model import HardwareConstants
 
 
-def _setup_logging() -> None:
-    """Configure root logger for the application."""
+def _setup_logging(loglevel: str) -> None:
+    """
+    Configure root logger for the application.
+
+    Args:
+        loglevel: The logging level to set for the root logger.
+    """
     root_logger = logging.getLogger()
     # Prevent adding duplicate handlers if this is ever called more than once.
     if root_logger.hasHandlers():
         return
-    root_logger.setLevel(logging.INFO)
+
+    # Convert string log level to its numeric equivalent
+    numeric_level = getattr(logging, loglevel.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError(f"Invalid log level: {loglevel}")
+
+    root_logger.setLevel(numeric_level)
     handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -36,6 +47,13 @@ def _parse_args() -> argparse.Namespace:
         default="hardware_profiles/default_config.yml",
         help="Path to the YAML configuration file.",
     )
+    parser.add_argument(
+        "--loglevel",
+        type=str.upper,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Set the application-wide logging level (default: INFO).",
+    )
     return parser.parse_args()
 
 
@@ -44,10 +62,11 @@ def main() -> NoReturn:
     Parse arguments, set up logging, and run the main application controller.
     """
     args = _parse_args()
-    _setup_logging()
+    _setup_logging(args.loglevel)
 
     logger = logging.getLogger(__name__)
     logger.info("Application starting with config: %s", args.config)
+    logger.debug("Debug logging is enabled.")
 
     try:
         hw_constants = HardwareConstants(config_path=args.config)
