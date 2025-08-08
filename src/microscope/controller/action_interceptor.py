@@ -64,13 +64,13 @@ class ActionInterceptor:
 
     def _custom_live_func(self, *args, **kwargs) -> None:
         """Hardware-aware function for the live action."""
-        logger.info("Custom live function triggered.")
+        logger.debug("Custom live function triggered.")
         if not self.mmc.isSequenceRunning():
-            logger.info("Starting live mode, enabling laser.")
+            logger.debug("Starting live mode, enabling laser.")
             enable_live_laser(self.mmc, self.model)
             self.mmc.startContinuousSequenceAcquisition(0)
         else:
-            logger.info("Stopping live mode, disabling laser.")
+            logger.debug("Stopping live mode, disabling laser.")
             self.mmc.stopSequenceAcquisition()
             disable_live_laser(self.mmc, self.model)
 

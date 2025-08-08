@@ -73,6 +73,7 @@ class HardwareConstants:
     slice_calibration_slope_um_per_deg: float = 0.0
 
     # --- PLogic Presets for Live/Snap ---
+    plogic_laser_on_preset: int = 0
     plogic_live_mode_preset: int = 0
     plogic_idle_mode_preset: int = 0
 

@@ -13,6 +13,7 @@ from microscope.application import setup_mda_widget
 from microscope.hardware import (
     close_global_shutter,
     initialize_system_hardware,
+    send_tiger_command,
     set_property,
 )
 from microscope.model.hardware_model import HardwareConstants
@@ -48,6 +49,12 @@ class ApplicationController:
         """
         if not self._initialize_hardware():
             logger.critical("Hardware initialization failed.")
+
+        # Arm the laser path once on startup.
+        logger.info("Arming laser for the session.")
+        plogic_addr_prefix = self.model.plogic_label.split(":")[-1]
+        cmd = f"{plogic_addr_prefix}CCA X={self.model.plogic_laser_on_preset}"
+        send_tiger_command(self.mmc, cmd, self.model)
 
         # Enable the SPIM beam once on startup.
         logger.info("Enabling SPIM beam for the session.")
