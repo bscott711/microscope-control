@@ -47,7 +47,7 @@ def _set_camera_trigger_mode(mmc: CMMCorePlus, camera_label: str, mode: str) -> 
 
     try:
         mmc.setProperty(camera_label, "TriggerMode", mode)
-        logger.info(f"Set {camera_label} 'TriggerMode' to '{mode}'.")
+        logger.debug(f"Set {camera_label} 'TriggerMode' to '{mode}'.")
         return True
     except Exception as e:
         logger.error(f"Failed to set {camera_label} 'TriggerMode' to '{mode}': {e}")
@@ -73,7 +73,7 @@ def set_camera_for_hardware_trigger(
     Returns:
         True if a suitable mode was successfully set, False otherwise.
     """
-    logger.info(f"Configuring {camera_label} for hardware-timed acquisition.")
+    logger.debug(f"Configuring {camera_label} for hardware-timed acquisition.")
     for mode in preferred_modes:
         if _set_camera_trigger_mode(mmc, camera_label, mode):
             return True
@@ -126,7 +126,7 @@ def check_and_reset_camera_trigger_modes(
 
         # If setting an external mode worked, revert to the safe/reset mode
         if _set_camera_trigger_mode(mmc, camera_label, reset_mode):
-            logger.info(f"Successfully tested and reset {camera_label}.")
+            logger.debug(f"Successfully tested and reset {camera_label}.")
             results[camera_label] = True
         else:
             logger.error(

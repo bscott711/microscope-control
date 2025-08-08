@@ -22,7 +22,7 @@ def open_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
     Opens the global shutter by programming a PLogic cell to be constantly HIGH.
     """
-    logger.info("Opening global shutter (BNC3 HIGH)...")
+    logger.debug("Opening global shutter (BNC3 HIGH)...")
     plogic_addr = hw.plogic_label.split(":")[-1]
     commands = [
         f"{plogic_addr}CCA X=0",  # Clear previous settings
@@ -48,7 +48,7 @@ def close_global_shutter(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
     Closes the global shutter by routing its output BNC to ground (LOW).
     """
-    logger.info("Closing global shutter (BNC3 LOW)...")
+    logger.debug("Closing global shutter (BNC3 LOW)...")
     if hw.plogic_label not in mmc.getLoadedDevices():
         logger.error("PLogic device not found, cannot close shutter.")
         return False
@@ -109,7 +109,7 @@ def enable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
     cmd = f"{plogic_addr_prefix}CCA X={hw.plogic_live_mode_preset}"
-    logger.info("Enabling laser for live/snap mode")
+    logger.debug("Enabling laser for live/snap mode")
     return send_tiger_command(mmc, cmd, hw)
 
 
@@ -119,5 +119,5 @@ def disable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
     cmd = f"{plogic_addr_prefix}CCA X={hw.plogic_idle_mode_preset}"
-    logger.info("Disabling laser for live/snap mode.")
+    logger.debug("Disabling laser for live/snap mode.")
     return send_tiger_command(mmc, cmd, hw)

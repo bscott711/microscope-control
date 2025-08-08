@@ -46,7 +46,7 @@ def initialize_system_hardware(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     Returns:
         True if all initialization steps succeeded, False otherwise.
     """
-    logger.info("Performing one-time system hardware initialization...")
+    logger.debug("Performing one-time system hardware initialization...")
 
     # A list of (name, function) tuples makes logging clear and is extensible.
     # All functions in the list must match the signature: (mmc, hw) -> bool.
@@ -56,7 +56,7 @@ def initialize_system_hardware(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     ]
 
     for step_name, step_func in initialization_steps:
-        logger.info(f"Executing initialization step: {step_name}...")
+        logger.debug(f"Executing initialization step: {step_name}...")
         try:
             if not step_func(mmc, hw):
                 logger.critical(
@@ -70,5 +70,5 @@ def initialize_system_hardware(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
             )
             return False
 
-    logger.info("System hardware initialization completed successfully.")
+    logger.debug("System hardware initialization completed successfully.")
     return True
