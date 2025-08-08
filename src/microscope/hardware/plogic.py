@@ -105,12 +105,24 @@ def configure_plogic_for_dual_nrt_pulses(
 
 def enable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:
     """
-    Sets PLogic to the live/snap mode laser preset.
+    Arms the laser path and sets PLogic to the live/snap mode laser preset.
     """
+    logger.info("Enabling laser for live/snap mode...")
     plogic_addr_prefix = hw.plogic_label.split(":")[-1]
-    cmd = f"{plogic_addr_prefix}CCA X={hw.plogic_live_mode_preset}"
-    logger.debug("Enabling laser for live/snap mode")
-    return send_tiger_command(mmc, cmd, hw)
+
+    # Command to arm the laser path (selects the laser)
+    arm_cmd = f"{plogic_addr_prefix}CCA X={hw.plogic_laser_on_preset}"
+    # Command to set the card to live mode (activates the output)
+    live_cmd = f"{plogic_addr_prefix}CCA X={hw.plogic_live_mode_preset}"
+
+    with tiger_command_batch(mmc, hw):
+        if not send_tiger_command(mmc, arm_cmd, hw):
+            logger.error("Failed to send laser arm command: %s", arm_cmd)
+            return False
+        if not send_tiger_command(mmc, live_cmd, hw):
+            logger.error("Failed to send live mode command: %s", live_cmd)
+            return False
+    return True
 
 
 def disable_live_laser(mmc: CMMCorePlus, hw: HardwareConstants) -> bool:

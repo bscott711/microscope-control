@@ -1,4 +1,3 @@
-# src/microscope/acquisition/engine.py
 """
 Custom MDA engine for PLogic-driven SPIM acquisitions.
 Manages the acquisition lifecycle, frame buffering, and scrubbing.
@@ -24,6 +23,8 @@ from microscope.acquisition.worker import AcquisitionWorker
 from microscope.hardware import (
     configure_galvo_for_spim_scan,
     configure_plogic_for_dual_nrt_pulses,
+    disable_live_laser,  # <-- ADD THIS IMPORT
+    send_tiger_command,
     set_camera_for_hardware_trigger,
     set_property,
     trigger_spim_scan_acquisition,
@@ -140,7 +141,6 @@ class PLogicMDAEngine(MDAEngine):
             num_z,
         )
 
-        self._mmc.setAutoShutter(False)
         if not set_camera_for_hardware_trigger(self._mmc, self.HW.camera_a_label):
             return False
 
@@ -176,6 +176,7 @@ class PLogicMDAEngine(MDAEngine):
             repeat_delay_ms=repeat_delay_ms,
             hw=self.HW,
         )
+        send_tiger_command(self._mmc, "PM E=1", self.HW)
         return True
 
     def _on_frame_ready(self, frame: object, event: MDAEvent, meta: dict) -> None:
@@ -194,10 +195,14 @@ class PLogicMDAEngine(MDAEngine):
     def _cleanup_hardware(self, sequence: MDASequence) -> None:
         """Resets hardware to a safe, idle state after acquisition."""
         logger.info("Cleaning up hardware state...")
-        self._mmc.stopSequenceAcquisition()
+        # Set PLogic to use its internal 4kHz clock
+        send_tiger_command(self._mmc, "PM E=0", self.HW)
         set_property(self._mmc, self.HW.camera_a_label, "TriggerMode", "Internal Trigger")
         set_property(self._mmc, self.HW.galvo_a_label, "SPIMState", "Idle")
-        self._mmc.setAutoShutter(self._original_autoshutter)
+        # FIX: Reset the PLogic card to its idle preset so that snap/live
+        # can function correctly after the MDA.
+        logger.debug("Resetting PLogic card to idle mode.")
+        disable_live_laser(self._mmc, self.HW)
         self._mmc.mda.events.sequenceFinished.emit(sequence)
 
     def _on_acquisition_finished(self, sequence: MDASequence) -> None:

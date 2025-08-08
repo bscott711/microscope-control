@@ -20,6 +20,7 @@ from pymmcore_plus.mda.handlers import (
     OMEZarrWriter,
 )
 from pymmcore_plus.metadata import FrameMetaV1, to_builtins
+from qtpy.QtCore import Slot  # type: ignore
 from useq import MDAEvent, MDASequence
 
 from microscope.acquisition import PLogicMDAEngine
@@ -50,12 +51,15 @@ class OMETiffWriterWithMetadata(OMETiffWriter):
         seq_path = self._meta_dir / f"{self._basename}_useq_MDASequence.json"
         seq_path.write_text(seq.model_dump_json(indent=2))
 
-    # FIX: The `meta` parameter's type hint must match the base class.
-    # At runtime, it's a dict, but the type hint must be FrameMetaV1.
-    def frameReady(self, frame: np.ndarray, event: MDAEvent, meta: FrameMetaV1) -> None:
-        super().frameReady(frame, event, meta)
+    @Slot(object, MDAEvent, dict)
+    def frameReady(self, frame: np.ndarray, event: MDAEvent, meta: dict) -> None:
+        # Convert the incoming metadata dict to a FrameMetaV1 object first.
+        meta_v1 = FrameMetaV1(**meta)
+        super().frameReady(frame, event, meta_v1)
+
+        # Store the same object in our local metadata list.
         key = str(event.index.get("p", 0))
-        self.frame_metadatas[key].append(meta)
+        self.frame_metadatas[key].append(meta_v1)
 
     def sequenceFinished(self, seq: MDASequence) -> None:
         super().sequenceFinished(seq)

@@ -1,3 +1,4 @@
+# src/microscope/controller/application_controller.py
 """
 Main application controller for the microscope.
 """
@@ -13,7 +14,6 @@ from microscope.application import setup_mda_widget
 from microscope.hardware import (
     close_global_shutter,
     initialize_system_hardware,
-    send_tiger_command,
     set_property,
 )
 from microscope.model.hardware_model import HardwareConstants
@@ -50,14 +50,8 @@ class ApplicationController:
         if not self._initialize_hardware():
             logger.critical("Hardware initialization failed.")
 
-        # Arm the laser path once on startup.
-        logger.debug("Arming laser for the session.")
-        plogic_addr_prefix = self.model.plogic_label.split(":")[-1]
-        cmd = f"{plogic_addr_prefix}CCA X={self.model.plogic_laser_on_preset}"
-        send_tiger_command(self.mmc, cmd, self.model)
-
         # Enable the SPIM beam once on startup.
-        logger.debug("Enabling SPIM beam for the session.")
+        logger.info("Enabling SPIM beam for the session.")
         set_property(self.mmc, self.model.galvo_a_label, "BeamEnabled", "Yes")
 
         self._disconnect_faulty_snap_handler()
@@ -76,7 +70,7 @@ class ApplicationController:
             if preview_widget:
                 # We disconnect its `append` slot, which calls the problematic `getImage`.
                 self.mmc.events.imageSnapped.disconnect(preview_widget.append)
-            logger.debug("Successfully disconnected faulty preview snap handler.")
+            logger.info("Successfully disconnected faulty preview snap handler.")
         except (AttributeError, TypeError, RuntimeError) as e:
             logger.warning("Could not disconnect faulty snap handler: %s", e)
 
@@ -102,7 +96,7 @@ class ApplicationController:
         """Connects the main viewer's events to the display update slot."""
         try:
             self.view.window._viewers_manager.mdaViewerCreated.connect(self._on_viewer_created)
-            logger.debug("Ready to connect sliders upon viewer creation.")
+            logger.info("Ready to connect sliders upon viewer creation.")
         except AttributeError as e:
             logger.error("Could not connect to viewer creation signal: %s", e)
 
@@ -127,7 +121,7 @@ class ApplicationController:
 
     def _on_exit(self) -> None:
         """Clean up hardware state and restore actions on application exit."""
-        logger.debug("Application closing. Cleaning up hardware.")
+        logger.info("Application closing. Cleaning up hardware.")
         set_property(self.mmc, self.model.galvo_a_label, "BeamEnabled", "No")
         close_global_shutter(self.mmc, self.model)
         self.interceptor.restore_actions()
